@@ -1,16 +1,15 @@
 #!/bin/bash
 
+
 ##
  #VARIABLES
 #
-
 INITIALPATH=`pwd`
 
 
 ##
  # Make new cPanel Account
 ##
-
 INPUTVALIDATION=0
 while [ $INPUTVALIDATION -eq 0 ]; do
 	echo -e "User?"
@@ -25,16 +24,12 @@ while [ $INPUTVALIDATION -eq 0 ]; do
 		INPUTVALIDATION=1
 	fi
 done
-
 /scripts/wwwacct $domain $cpaneluser $password 1000 0 n n n 10 10 10 10 10 5000 y hgdesign hgdesign_default 10 10
 
 
 ##
  # Create new WordPress Install
 ##
-
-
-
 WPPATH=/home/$cpaneluser/www/
 cd $WPPATH
 MYSQLUSER="$cpaneluser"_wrdp1
