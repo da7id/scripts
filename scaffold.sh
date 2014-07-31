@@ -45,6 +45,9 @@ mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};" || error_exit "Could n
 mysql -u root --execute="CREATE USER '${MYSQLUSER}'@'localhost' IDENTIFIED BY '${MYSQLPASS}';" || error_exit "Could not create MySQL User ${MYSQLUSER}, script terminating"
 mysql -u root --execute="GRANT ALL PRIVILEGES ON ${MYSQLDBNAME} . * TO '${MYSQLUSER}'@'localhost';" || error_exit "Could not assign ${MYSQLUSER} to ${MYSQLDBNAME} successfully, script terminating"
 
+##########      Map the Database to the correct cPanel User ########
+/usr/local/cpanel/bin/dbmaptool $cpaneluser --type mysql --dbs $MYSQLDBNAME
+
 ##########      Create WordPress Install    ###########
 cd $WPPATH || error_exit "Could not move to correct WP directory, $WPPATH, script terminating"
 su $cpaneluser -c "wp core download --force" || error_exit "Could not download WordPress Core, script terminating"
