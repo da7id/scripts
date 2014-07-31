@@ -41,7 +41,7 @@ MYSQLPASS=`cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1`
 /scripts/wwwacct $domain $cpaneluser $password 1000 0 n n n 10 10 10 10 10 5000 y hgdesign hgdesign_default 10 10 || error_exit "Could not create cPanel User account, script terminating"
 
 ##########       Create DB For Use by WP    ##########
-mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};" || error_exit "Could not create MySQL Database ${MYSQLDBNAME}, script terminating"
+mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};" || error_exit "Could not create MySQL Database ${MYSQLDBNAME}, script terminating" 
 mysql -u root --execute="CREATE USER '${MYSQLUSER}'@'localhost' IDENTIFIED BY '${MYSQLPASS}';" || error_exit "Could not create MySQL User ${MYSQLUSER}, script terminating"
 mysql -u root --execute="GRANT ALL PRIVILEGES ON ${MYSQLDBNAME} . * TO '${MYSQLUSER}'@'localhost';" || error_exit "Could not assign ${MYSQLUSER} to ${MYSQLDBNAME} successfully, script terminating"
 
