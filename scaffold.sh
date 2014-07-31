@@ -39,7 +39,7 @@ WPPATH=/home/$cpaneluser/www/
 cd $WPPATH
 MYSQLUSER="$cpaneluser"_wrdp1
 MYSQLDBNAME="$cpaneluser"_wrdp1
-MYSQLPASS="hostgator123"
+MYSQLPASS=`cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1`
 mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};"
 mysql -u root --execute="CREATE USER '${MYSQLUSER}'@'localhost' IDENTIFIED BY '${MYSQLPASS}';"
 mysql -u root --execute="GRANT ALL PRIVILEGES ON ${MYSQLDBNAME} . * TO '${MYSQLUSER}'@'localhost';"
