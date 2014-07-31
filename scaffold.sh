@@ -22,16 +22,16 @@ MYSQLDBNAME="$cpaneluser"_wrdp1
 MYSQLPASS=`cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-32} | head -n 1`
 
 ##########       Create cPanel Account      ##########
-/scripts/wwwacct $domain $cpaneluser $password 1000 0 n n n 10 10 10 10 10 5000 y hgdesign hgdesign_default 10 10
+/scripts/wwwacct $domain $cpaneluser $password 1000 0 n n n 10 10 10 10 10 5000 y hgdesign hgdesign_default 10 10 || error_exit "Could not create cPanel User account, script terminating"
 
 ##########       Create DB For Use by WP    ##########
-mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};"
-mysql -u root --execute="CREATE USER '${MYSQLUSER}'@'localhost' IDENTIFIED BY '${MYSQLPASS}';"
-mysql -u root --execute="GRANT ALL PRIVILEGES ON ${MYSQLDBNAME} . * TO '${MYSQLUSER}'@'localhost';"
+mysql -u root --execute="CREATE DATABASE ${MYSQLDBNAME};" || error_exit "Could not create MySQL Database ${MYSQLDBNAME}, script terminating"
+mysql -u root --execute="CREATE USER '${MYSQLUSER}'@'localhost' IDENTIFIED BY '${MYSQLPASS}';" || error_exit "Could not create MySQL User ${MYSQLUSER}, script terminating"
+mysql -u root --execute="GRANT ALL PRIVILEGES ON ${MYSQLDBNAME} . * TO '${MYSQLUSER}'@'localhost';" || error_exit "Could not assign ${MYSQLUSER} to ${MYSQLDBNAME} successfully, script terminating"
 
 ##########      Create WordPress Install    ###########
-cd $WPPATH
-su $cpaneluser -c "wp core download --force"
-su $cpaneluser -c "wp core config --dbname=$MYSQLDBNAME --dbuser=$MYSQLUSER --dbpass=$MYSQLPASS"
-su $cpaneluser -c "wp core install --url=\"198.20.227.88/~$cpaneluser\" --title=\"New WordPress\" --admin_user=\"$cpaneluser\" --admin_password=\"hostgator123\" --admin_email=\"dbarron@hostgator.com\""
+cd $WPPATH || error_exit "Could not move to correct WP directory, $WPPATH, script terminating"
+su $cpaneluser -c "wp core download --force" || error_exit "Could not download WordPress Core, script terminating"
+su $cpaneluser -c "wp core config --dbname=$MYSQLDBNAME --dbuser=$MYSQLUSER --dbpass=$MYSQLPASS" || error_exit "Could not configure the WordPress Install on the correct Database ${MYSQLDBNAME}, script terminating"
+su $cpaneluser -c "wp core install --url=\"198.20.227.88/~$cpaneluser\" --title=\"New WordPress\" --admin_user=\"$cpaneluser\" --admin_password=\"hostgator123\" --admin_email=\"dbarron@hostgator.com\"" || error_exit "Could not install correct variables to WordPress DB / Installation, script terminating"
 cd $INITIALPATH
