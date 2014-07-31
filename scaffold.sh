@@ -1,23 +1,19 @@
 #!/bin/bash
 
 ##########     Get User Input      ##########
-while [ $INPUTVALIDATION -eq 0 ]; do
+validator=""
+while [ "$validator" != "y" ]; do
 	echo -e "User?"
 	read cpaneluser
 	echo -e "Domain?"
 	read domain
 	echo -e "Pass?"
 	read password
-	echo -e "Look right?(type 1 for yes)\n----------------\nUser: $cpaneluser \nDomain: $domain \nPass: $password"
+	echo -e "Look right?(y/n)\n----------------\nUser: $cpaneluser \nDomain: $domain \nPass: $password"
 	read validator
-	if [[ $validator == "y" ]]; then
-		INPUTVALIDATION=1
-	fi
 done
 
 ##########     Create Script Variables      ##########
-INPUTVALIDATION=0
-
 INITIALPATH=`pwd`
 WPPATH=/home/$cpaneluser/www/
 
