@@ -40,3 +40,25 @@ cd $WPPATH || error_exit "Could not move to correct WP directory, $WPPATH, scrip
 su $cpaneluser -c "wp core download --force" || error_exit "Could not download WordPress Core, script terminating"
 su $cpaneluser -c "wp core config --dbname=$MYSQLDBNAME --dbuser=$MYSQLUSER --dbpass=$MYSQLPASS" || error_exit "Could not configure the WordPress Install on the correct Database ${MYSQLDBNAME}, script terminating"
 su $cpaneluser -c "wp core install --url=\"198.20.227.88/~$cpaneluser\" --title=\"New WordPress\" --admin_user=\"$cpaneluser\" --admin_password=\"hostgator123\" --admin_email=\"dbarron@hostgator.com\"" || error_exit "Could not install correct variables to WordPress DB / Installation, script terminating"
+
+##########       Get User Theme Choice       ##########
+number=1
+choice=""
+themes[0]=""
+for file in /home/hgdesign/www/themes/WordPress/zipfiles/* 
+do
+	echo "$number. ${file:36}"
+	(( number++ ))
+	themes[${number-1}]=${file:36}
+done
+
+echo -e "Which theme would you like?"
+read choice
+theme=${themes[$choice+1}}
+echo "You chose $theme, installing and activating."
+cd /home/$cpaneluser/www
+cp /home/hgdesign/www/themes/WordPress/zipfiles/$theme ./$theme
+perms $cpaneluser
+su ccyc -c "wp theme install $theme --activate"
+
+su $cpaneluser -c "wp theme install /home/hgdesign/www/themes/WordPress/${themes[$choice+1]} --activate"
