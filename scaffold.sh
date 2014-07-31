@@ -21,7 +21,6 @@ while [ "$validator" != "y" ]; do
 done
 
 ##########     Create Script Variables      ##########
-INITIALPATH=`pwd`
 WPPATH=/home/$cpaneluser/www/
 
 MYSQLUSER="$cpaneluser"_wrdp1
@@ -41,4 +40,3 @@ cd $WPPATH || error_exit "Could not move to correct WP directory, $WPPATH, scrip
 su $cpaneluser -c "wp core download --force" || error_exit "Could not download WordPress Core, script terminating"
 su $cpaneluser -c "wp core config --dbname=$MYSQLDBNAME --dbuser=$MYSQLUSER --dbpass=$MYSQLPASS" || error_exit "Could not configure the WordPress Install on the correct Database ${MYSQLDBNAME}, script terminating"
 su $cpaneluser -c "wp core install --url=\"198.20.227.88/~$cpaneluser\" --title=\"New WordPress\" --admin_user=\"$cpaneluser\" --admin_password=\"hostgator123\" --admin_email=\"dbarron@hostgator.com\"" || error_exit "Could not install correct variables to WordPress DB / Installation, script terminating"
-cd $INITIALPATH
