@@ -1,5 +1,12 @@
 #!/bin/bash
 
+##########     Function Creation   ##########
+function error_exit
+{
+	echo "$1" 1>&2
+	exit 1
+}
+
 ##########     Get User Input      ##########
 validator=""
 while [ "$validator" != "y" ]; do
