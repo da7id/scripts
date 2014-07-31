@@ -7,6 +7,16 @@ function error_exit
 	exit 1
 }
 
+function print_files
+{
+	number=1
+	for file in /home/hgdesign/www/themes/WordPress/zipfiles/*
+	do
+		echo "$number. ${file:45}"
+		(( number++ ))
+		themes[${number-1}]=${file:45}
+	done
+}
 ##########     Get User Input      ##########
 validator=""
 while [ "$validator" != "y" ]; do
@@ -45,20 +55,17 @@ su $cpaneluser -c "wp core install --url=\"198.20.227.88/~$cpaneluser\" --title=
 number=1
 choice=""
 themes[0]=""
-for file in /home/hgdesign/www/themes/WordPress/zipfiles/* 
-do
-	echo "$number. ${file:36}"
-	(( number++ ))
-	themes[${number-1}]=${file:36}
-done
-
-echo -e "Which theme would you like?"
-read choice
-theme=${themes[$choice+1}}
+validator="n"
+while [ "$validator" != "y" ]; do
+	print_files
+	echo -e "Which theme would you like?"
+	read choice
+	theme=${themes[$choice+1]}
+	echo "You chose #$choice. $theme. Is that correct?"
+	read validator
+done 
 echo "You chose $theme, installing and activating."
 cd /home/$cpaneluser/www
 cp /home/hgdesign/www/themes/WordPress/zipfiles/$theme ./$theme
 perms $cpaneluser
-su ccyc -c "wp theme install $theme --activate"
-
-su $cpaneluser -c "wp theme install /home/hgdesign/www/themes/WordPress/${themes[$choice+1]} --activate"
+su $cpaneluser -c "wp theme install $theme --activate"
