@@ -61,14 +61,16 @@ themes[0]=""
 validator="n"
 while [ "$validator" != "y" ]; do
 	print_files
-	echo -e "Which theme would you like?"
+	echo -e "Which theme would you like? (Enter 0 for no theme)"
 	read choice
 	theme=${themes[$choice+1]}
 	echo "You chose #$choice. $theme. Is that correct?"
 	read validator
 done 
-echo "You chose $theme, installing and activating."
-cd /home/$cpaneluser/www
-cp /home/hgdesign/www/themes/WordPress/zipfiles/$theme ./$theme
-perms $cpaneluser
-su $cpaneluser -c "wp theme install $theme --activate"
+if [ "$choice" != "0" ]; then
+	echo "You chose $theme, installing and activating."
+	cd /home/$cpaneluser/www
+	cp /home/hgdesign/www/themes/WordPress/zipfiles/$theme ./$theme
+	perms $cpaneluser
+	su $cpaneluser -c "wp theme install $theme --activate"
+fi
