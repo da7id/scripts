@@ -1,3 +1,1 @@
-#!/bin/bash
-cd /
-exit 1
+echo "YAY"
