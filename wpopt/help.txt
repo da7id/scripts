@@ -1,0 +1,123 @@
+imports
+	calls python modules that will be used at various parts of the script
+script_info
+	creates variables to store the author, version, script stage, contact email
+begin()
+	creates variables to store the present working directory, cPanel user, home partition, the cPanel user’s homedir, and the httpd.conf location
+sanity_check()
+	confirms a WordPress is installed at the present working directory and the httpd.conf exists
+show_help()
+	shows the script’s help page, which contains all command line arguments
+show_version()
+	displays the information contained in the script_info section
+config()
+	checks the present working directory for the wp-config.php file, if it is not found, checks the parent directory for one. It then checks the config file to define the MySQL user/password/database, the database table prefix, if the wp-cron.php is enabled, if javascript concatenation is allowed, the autosave increment, caching status, and if the installation is a WPMU. Using the MySQL credentials and the database table prefix values, it then connects to MySQL to grab the values for the site URL, home URL, active plugins, template, stylesheet, blogname, number of posts, number of pages, permalink structure, number of comments, comments containing hyperlinks, comments containing HTML coding, comments containing spammy words, spam comments, trash comments and approved comments. It then determines the root domain and thee folder path of the installation
+serialize()
+	takes an array and converts it into a serialized string, like what active_plugins value in the database is
+deserialize()
+	takes a serialized string and converts it into an array
+apache()
+	determines the domlog location from the httpd.conf
+mysqldump()
+	generates a SQL dump for the database
+backup()
+	generates a full backup, including both files and a SQL dump
+info()
+	produces a sak-cli like output detailing information about the installation
+show_sql()
+	makes copies of the wp-config.php and the index.php files, then adds coding to them to show all MySQL queries run on the site. It then uses libcurl to curl the site, saving the output to an array. It then grabs all queries from said output, the total time each query ran, and the files calling said queries. It then uses MySQl to test each query for validity.
+htaccess_analysis()
+	scans the .htaccess file, looking for indicators showing etags are off, mod_expires is in use, mod_deflate is in use, and mod_headers is in use
+plugin_analysis()
+	uses the deserialize function, then analyzes each plugin based on name, looking for key ones. Sets variables to be used later in the analysis portion of the script.
+db_analysis()
+	starts by grabbing the number of rows and the size in bytes of each of the database tables. It then runs select queries to build a count of “useless” rows that could be removed. Currently it checks for: spam-like comments, oprhaned comment meta, transient data, unused terms, orphaned terms, orphaned relationships, comments detailing user-agents, post revisions, orphaned postmeta data.
+access()
+	analyzes the domlog for the domain, looking for the specific installation if needed. Checks for numerous admin-ajax.php calls (heartbeat), xmlrpc.php calls (xmlrpc flood), and wp-login.php calls (brute force). Also checks for excessive bot traffic and other such “red flags”.
+analysis()
+	grabs all obtained information and prints out an analysis based on the results
+convert_cron()
+	makes a copy of the crontab file and wp-config.php, then adds the proper coding to each. Allows for the setting of every hour at minute 00, every hour on minute 30, and every hour on minute 05.
+opt_config()
+	goes through the wp-config.php and adds coding to disable javascript concatenation and set the autosave interval to 3600
+db_clean()
+	cleans the database of invalid or unneeded rows, then repairs and optimizes the database
+bad_requests()
+	blocks requests to xmlrpc.php, blocks any malicious bots, disables heartbeat, and password protects the wp-login.php via the .htaccess file
+opt_images()
+	locates all image files (jpg, jpeg, png, gif) and uses system binaries to optimize them. Prints a report when done. This takes a lot of time to complete, and does a series of optimizations on each file. It then compares said optimized images to determine the better one.
+img_opt()
+	installs Ewww Image Optimizer and gives the option to optimize all older image files
+phase_one()
+	makes a backup and does an analysis
+phase_two()
+	makes a backup and optimizes
+phase_four()
+	tells you to do everything else manually
+options()
+	this handles the command line options. This is getopts
+show_output()
+	determines what to run
+main()
+	runs the script, has error handling override
+perms()
+	fix file / folder ownerships
+
+
+Explaining Why Things Are Done
+
+1. Convert wp-cron.php
+
+This file is usually called every time the site is requested, which can very quickly become destructive. Since many core procedures are done via this, you cannot simply disable it. Thus, you need to control how often it runs. The best way to do this is fully disable it via the wp-config.php, then manually run it via a cron job. Keep in mind things like the customer scheduling posts. You want this to run shortly after the scheduled time.
+
+
+2. Optimize images
+
+Rendering images is one of the lengtheiest parts of a page’s load times. The longer it takes to render an image, the more resources that are being utilized. Thus, you want your image compressed as much as possible, and you want jpgs progressive if feasible.
+
+
+3. Javascript concatenation
+
+By default, WordPress’s backend takes all javascript coding and concatenates it together. The concept was to make it all run in one uniform step. The problems is sometimes this can be resource intensive, or conflicting coding causes stuff to no longer work properly. This is especially true when the high reliance on ajax calls is taken into effect. As such, the best thing to do is disable it. The source might look a little “messy” (or more like regular coding), but small price to pay.
+
+4. Autosave intervals
+
+Regardless of what is being done in the WordPress backend, admin-ajax.php calls are being made to save what is being worked on. Great concept in theory, but this has proven destructive in a lot of cases. By default it autosaves every 30 seconds, which is excessive since it gets an autosave for basically everything. It is best to set it to 1800-3600 seconds, since anything less can stack too quickly.
+
+
+5. Calendar plugins
+
+These basically make pages for every single day, whether there is an event or such in place or not. These stack up quickly and are a doorway to post / bot abuse, so it is best to avoid these at all costs.
+
+
+6. Database Optimization
+
+WordPress is extremely database driven. As such, the database needs to be working as best as it can. This means repairing and optimizing it on a frequent basis, and keeping it as small as possible. 
+
+
+7. Fighting spammers
+
+Even a script optimized to the fullest can be destroyed by malicious actions. The most common types of malicious actions are comment spamming, user registration spamming, invalid request, and form abuse. In most of these cases, the way to fight them is to use Akismet and BadBehavior, which act as a mini-firewall to stop most forms of spamming and bad requests.
+
+
+8. Fighting floods / brutes / attacks
+
+By mere definition, attacks of any kind are made to abuse resources as much as possible. This is why it is imperative to review the traffic and locate potential cases of floods, bot abuse, and so on.
+
+
+9. Heartbeat
+
+As of WordPress 3.6, the heartbeat API has been a double-edged blad. The theory behind it is solid, and (when not in excess) would work wonderfully. However it is only noticed when it begins to cause issues. Through ajax calls, the site has a plethora of tasks being done via admin-ajax.php calls. In most cases, the best thing to do is disable it, either partially or completely. Adding this to the theme’s functions.php file will achieve this:
+			add_action(‘init’,’kill_heartbeat’,1);
+			function kill_heartbeat(){
+				global $pagenow;
+				//if($pagenow == ‘index.php’)
+				//if($pagenow == ‘post.php’ || $pagenow == ‘revision.php’)
+					wp_deregister_script(‘heartbeat’);
+			}
+	The commented lines determine when to kill it, either for just the main page (index.php) or when making posts (post.php or revision.php). Leaving both commented kills 100% of the time.
+
+
+10. The theme
+
+Almost always overlooked, for one reason or another, the theme the site uses can be a huge contributor. To get a good read on the theme, check how many SQL calls it is making. Then strace the site from start to finish, and see how many times the theme is called. In theory, neither should be a very high number, as a good theme doesn’t self-call over and over again.
