@@ -18,19 +18,14 @@ function print_files
 	done
 }
 ##########     Get User Input      ##########
-validator=""
-while [ "$validator" != "y" ]; do
-	echo -e "User?"
-	read cpaneluser
-	echo -e "Domain?"
-	read domain
-	echo -e "Pass?"
-	read password
-	echo -e "Look right?(y/n)\n----------------\nUser: $cpaneluser \nDomain: $domain \nPass: $password"
-	read validator
-done
+echo -e "User?"
+read cpaneluser
+echo -e "Domain?"
+read domain
+password="hostgator123"
 
 ##########     Create Script Variables      ##########
+validator=""
 WPPATH=/home/$cpaneluser/www/
 
 MYSQLUSER="$cpaneluser"_wrdp1
