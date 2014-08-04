@@ -1,0 +1,1728 @@
+#!/usr/bin/python
+
+#####<imports>#####
+import re, sys, os, socket, datetime, tarfile, gzip, MySQLdb, getopt, shutil
+import warnings, traceback, urllib2, glob, collections, string, random
+import urllib, zipfile, time
+#####</imports>#####
+
+#####<script_info>#####
+author = 'Jason B. Colyer'
+version = '1.0'
+stage = 'Beta'
+contact = 'support@reyloc.com'
+#####</script_info>#####
+
+#####<script_variables>#####
+vars = {}
+#####</script_variables>#####
+
+#####<function: begin>#####
+def begin():
+	global vars
+	vars['pwd'] = os.getcwd()
+	vars['cp_user'] = os.getcwd().split('/')[2]
+	vars['cp_home'] = os.getcwd().split('/')[1]
+	vars['homedir'] = "/%s/%s" % (vars['cp_home'], vars['cp_user'])
+	vars['conf'] = '/usr/local/apache/conf/httpd.conf'
+#####</function: begin>#####
+
+#####<function: sanity_check>#####
+def sanity_check():
+	global vars
+	if not os.path.exists(vars['conf']):
+		print '\nhttpd.conf not located, you should escalate this'
+		sys.exit("\n\nExiting for safety...\n\n")
+	if not os.path.exists('wp-admin') or not os.path.exists('wp-includes'):
+		print '\nNot seeing core WordPress files'
+		sys.exit("\n\nExiting for safety...\n\n")
+#####</function: sanity_check>#####
+
+#####<function: perms>#####
+def perms():
+        global vars
+        u = int(os.popen("id -u %s" % vars['cp_user']).read())
+        g = int(os.popen("id -g %s" % vars['cp_user']).read())
+        for pwd, dirs, files in os.walk(os.getcwd()):
+                for f in files:
+                        f = os.path.join(pwd, f)
+                        os.chown(f, u, g)
+                for d in dirs:
+                        d = os.path.join(pwd, d)
+                        os.chown(d, u, g)
+#####</function: perms>#####
+
+#####<function: show_help>#####
+def show_help():
+	print "\n\tUsage: wp_optimizer [options]"
+	print "\n\tAvailable options:\n"
+	print "\t-h\t\tShow this help page"
+        print "\t-V\t\tShow script info"
+        print "\t-v\t\tVerbose: Can be chained up to 2 times (ie -vv)"
+        print "\t-e\t\tExtended: Locate and use archived domlogs"
+        print "\t-a\t\tShow domlog analysis and exit"
+        print "\t-i\t\tShow WordPress info and exit"
+        print "\t-d\t\tShow database analysis and exit"
+	print "\t-1\t\tStart Phase One"
+	print "\t-2\t\tStart Phase Two"
+	print "\t-3\t\tStart Phase Three"
+	print "\t-4\t\tStart Phase Four"
+	print "\n\tPhase Descriptions:"
+	print "\tPhase 1: Backup and Analysis"
+	print "\tPhase 2: Backup and Optimization"
+	print "\tPhase 3: Backup and Re-Analysis"
+	print "\tPhase 4: ???"
+	print "\n\tNote:"
+	print "\tWhen it comes to -a, -d, -i, -1, -2, -3, -4 only the last entered one will run"
+	sys.exit("\n")
+
+#####</function: show_help>#####
+
+#####<function: show_version>#####
+def show_version():
+	print "\nAuthor:\t\t%s\nVersion:\t%s\nStage:\t\t%s\n" % (author, version, stage)
+	sys.exit("\n")
+#####</function: show_version>#####
+
+#####<function: config>#####
+def config():
+	global vars
+	file = "%s/wp-config.php" % vars['pwd']
+	file_alt = "%s/wp-config.php" % '/'.join(vars['pwd'].split('/')[:-1])
+	if os.path.exists(file):
+		vars['config'] = file
+	elif os.path.exists(file_alt):
+		print "\n%s not found, using %s instead..." % (file, file_alt)
+		print "If this is incorrect, hit Ctrl+C to exit, then rectify the issue\n"
+		vars['config'] = file_alt
+	else:
+		sys.exit("\n\nwp-config.php not found, exiting for safety...\n\n")
+	f = open(vars['config'])
+	lines = [x.strip("\n") for x in f.readlines()]
+	f.close()
+	for line in lines:
+		if re.match("( +)?define\( ?['\"]?DB_NAME", line):
+			vars['dbname'] = line.split(', ')[1].replace(' ','').split(')')[0][1:-1]
+		if re.match("( +)?define\( ?['\"]?DB_USER", line):
+			vars['dbuser'] = line.split(',')[1].replace(' ','').split(')')[0][1:-1]
+		if re.match("( +)?define\( ?['\"]?DB_PASS", line):
+			vars['dbpass'] = line.split(', ')[1].replace(' ','').split(')')[0][1:-1]
+		if re.match("( +)?define\( ?['\"]?DB_HOST", line):
+			vars['dbhost'] = line.split(', ')[1].replace(' ','').split(')')[0][1:-1]
+		if re.match("( +)?define\( ?['\"]?DISABLE_WP_CRON", line):
+			vars['cron'] = line.split(',')[1].replace(' ','').split(')')[0]
+		if re.match("( +)?\$table_prefix", line):
+			vars['pre'] = line.split('=')[1].replace(' ','').split(';')[0][1:-1]
+		if re.match("( +)?define\( ?['\"]?WP_ALLOW_MULTISITE['\"]?, ?t", line):
+			sys.exit("\n\nThis script isn't WPMU compatible. Exiting for safety...\n")
+		if re.match("( +)?define\( ?['\"]?CONCATENATE", line):
+			vars['java'] = line.split(',')[1].replace(' ','').split(')')[0]
+		if re.match("( +)?define\( ?['\"]?AUTOSAVE", line):
+			vars['autosave'] = line.split(',')[1].replace(' ','').split(')')[0]
+		if re.match("( +)?define\( ?['\"]?WP_CACHE", line):
+			vars['cache'] = line.split(',')[1].replace(' ','').split(')')[0]
+	if not 'dbname' in vars or not 'dbpass' in vars or not 'dbuser' in vars or not 'pre' in vars:
+		sys.exit("\n\nUnable to obtain MySQL variables, exiting for safety...\n")
+	if not 'dbhost' in vars or vars['dbhost'] != 'localhost':
+		sys.exit("\n\nMySQL host is remote, undefined, or invalid, exiting for safety...\n")
+	if not 'java' in vars:
+		vars['java'] = 'true'
+	if not 'autosave' in vars:
+		vars['autosave'] = '30'
+	if not 'cron' in vars:
+		vars['cron'] = 'Enabled'
+	if not 'cache' in vars:
+		vars['cache'] = 'false'
+	dayandname = '/%year%/%monthnum%/%day%/%postname%/'
+	monthandname = '/%year%/%monthnum%/%postname%/'
+	numeric = '/archives/%post_id%'
+	postname = '%postname%/'
+	html = '%<%>%'
+	link = '%http%'
+	word = "'%shipping\\!%' or '%today\\!%' or '%here\\!%' or '%fingertips\\!%' or '%online\\!%'"
+	qry1 = "select option_value from %soptions where option_name='siteurl'" % vars['pre']
+        qry2 = "select option_value from %soptions where option_name='home'" % vars['pre']
+        qry3 = "select option_value from %soptions where option_name='active_plugins'" % vars['pre']
+        qry4 = "select option_value from %soptions where option_name='template'" % vars['pre']
+        qry5 = "select option_value from %soptions where option_name='stylesheet'" % vars['pre']
+        qry6 = "select option_value from %soptions where option_name='blogname'" % vars['pre']
+        qry7 = "select count(*) from %sposts where post_type='post'" % vars['pre']
+        qry8 = "select count(*) from %sposts where post_type='page'" % vars['pre']
+        qry9 = "select count(*) from %scomments" % vars['pre']
+        qry10 = "select option_value from %soptions where option_name='permalink_structure'" % vars['pre']
+        qry11 = "select count(*) from %scomments where comment_content like '%s'" % (vars['pre'], html)
+        qry12 = "select count(*) from %scomments where comment_content like '%s'" % (vars['pre'], link)
+        qry13 = "select count(*) from %scomments where comment_content like %s" % (vars['pre'], word)
+        qry14 = "select count(*) from %scomments where comment_approved='spam'" % vars['pre']
+        qry15 = "select count(*) from %scomments where comment_approved='trash'" % vars['pre']
+        qry16 = "select count(*) from %scomments where comment_approved='1'" % vars['pre']
+	warnings.filterwarnings('ignore', category = MySQLdb.Warning)
+	try:
+		con = MySQLdb.connect(db="%s" % vars['dbname'],
+				      user="%s" % vars['dbuser'],
+				      passwd="%s" % vars['dbpass'])
+		cur = con.cursor()
+		cur.execute(qry1)
+                vars['site'] = cur.fetchall()[0][0]
+                cur.execute(qry2)
+                vars['homeurl'] = cur.fetchall()[0][0]
+                cur.execute(qry3)
+                vars['plug_serial'] = cur.fetchall()[0][0]
+                cur.execute(qry4)
+                vars['template'] = cur.fetchall()[0][0]
+                cur.execute(qry5)
+                vars['stylesheet'] = cur.fetchall()[0][0]
+                cur.execute(qry6)
+                vars['blogname'] = cur.fetchall()[0][0]
+                cur.execute(qry7)
+                vars['posts'] = cur.fetchall()[0][0]
+                cur.execute(qry8)
+                vars['pages'] = cur.fetchall()[0][0]
+                cur.execute(qry9)
+                vars['comments'] = cur.fetchall()[0][0]
+                cur.execute(qry10)
+                vars['perma'] = cur.fetchall()[0][0]
+                cur.execute(qry11)
+                vars['html'] = cur.fetchall()[0][0]
+                cur.execute(qry12)
+                vars['link'] = cur.fetchall()[0][0]
+                cur.execute(qry13)
+                vars['word'] = cur.fetchall()[0][0]
+                cur.execute(qry14)
+                vars['spam'] = cur.fetchall()[0][0]
+                cur.execute(qry15)
+		vars['trash'] = cur.fetchall()[0][0]
+                cur.execute(qry16)
+		vars['approved'] = cur.fetchall()[0][0]
+	except MySQLdb.Error, e:
+		try:
+			print "\n\nMySQL Error #%d: %s" % (e.args[0], e.args[1])
+			sys.exit("\nExiting for safety...\n")
+		except IndexError:
+			print "\n\nMySQL Error: %s" % str(e)
+			sys.exit("\nExiting for safety...\n")
+	cur.close()
+	con.close()
+	if vars['perma'] == '':
+		vars['perma_desc'] = 'Default'
+	elif vars['perma'] == dayandname:
+		vars['perma_desc'] = 'Day and Name'
+	elif vars['perma'] == monthandname:
+		vars['perma_desc'] = 'Month and Name'
+	elif vars['perma'] == numeric:
+		vars['perma_desc'] = 'Numeric'
+	elif vars['perma'] == postname:
+		vars['perma_desc'] = 'Postname'
+	else:
+		vars['perma_desc'] = 'Custom'
+	domain = vars['site'].replace('http://', '').replace('https://', '').replace('www.', '')
+	vars['dom_path'] = '/' + '/'.join(domain.split('/')[1:])
+	vars['domain'] = domain.split('/')[0]
+#####</function: config>#####
+
+#####<function: serialize>#####
+def serialize(deserial):
+	a = 'a:%s:{' % str(len(deserial))
+	i = 0
+	for path in sorted(deserial):
+		a += 'i:%s;s:%s:"%s";' % (str(i), str(len(path)), path)
+		i += 1
+	a += '}'
+	return a
+#####</function: serialize>#####
+
+#####<function: deserialize>#####
+def deserialize(serial):
+	i, a, b = [0, [], serial.split('"')[1:]]
+	while (i < len(b)):
+		if (i%2 == 0):
+			a.append(b[i])
+		i += 1
+	return a
+#####</function: deserialize>#####
+
+#####<function: apache>#####
+def apache():
+	global vars
+	f = open(vars['conf'])
+	lines = [x.strip("\n") for x in f.readlines()]
+	f.close()
+	i = 0
+	while (i < len(lines)):
+		line = lines[i]
+		if re.match("( +)?Server", line) and re.search(vars['domain'], line):
+			y = i + 1
+			while (y < i + 20):
+				if re.match("( +)?CustomLog", lines[y]):
+					vars['domlog'] = lines[y].split()[1]
+					break
+				y += 1
+		if 'domlog' in vars:
+			break
+		i += 1
+#####</function: apache>#####
+
+#####<function: mysqldump>#####
+def mysqldump():
+	global vars
+	date = datetime.datetime.now().strftime("%b-%d-%Y")
+	file = "%s.%s.sql" % (vars['dbname'], date)
+	i = 1
+	while os.path.exists("%s.gz" % file):
+		file = "%s.%s.%d.sql" % (vars['dbname'], date, i)
+		i += 1
+	os.system("mysqldump -u %s --password='%s' %s > %s" % \
+		(vars['dbuser'], vars['dbpass'], vars['dbname'], file))
+	inf = open(file, "rb").read()
+	gz = gzip.open("%s.gz" % file, "wb")
+	gz.write(inf)
+	gz.close()
+	os.remove(file)
+	return "%s.gz" % file
+#####</function: mysqldump>#####
+
+#####<function: backup>#####
+def backup():
+	global vars
+	print "\nGenerating a backup, please be patient...\n"
+	date = datetime.datetime.now().strftime("%b-%d-%Y")
+	file = "hg_optimizer_backup.%s.tar.gz" % date
+	i = 1
+	while os.path.exists(file):
+		file = "hg_optimizer_backup.%s.%d.tar.gz" % (date, i)
+		i += 1
+	dump = mysqldump()
+	to_backup = ['.htaccess', 'index.php', 'license.txt', 'readme.html', 'robots.txt',
+		'wp-activate.php', 'wp-admin', 'wp-blog-header.php', 'wp-comments-post.php',
+		'wp-config.php', 'wp-config-sample.php', 'wp-content', 'wp-cron.php',
+		'wp-includes', 'wp-links-opml.php', 'wp-load.php', 'wp-login.php',
+		'wp-mail.php', 'wp-settings.php', 'wp-signup.php', 'wp-trackback.php',
+		'xmlrpc.php', dump]
+	if os.path.exists('wp-content/cache'):
+		for i in glob.glob('wp-content/cache/*'):
+			if os.path.isdir(i):
+				shutil.rmtree(i)
+			else:
+				os.unlink(i)
+	tar = tarfile.open(file, "w:gz")
+	for item in to_backup:
+		if os.path.exists(item):
+			tar.add(item)
+	os.unlink(dump)
+	print "\nBackup generated at %s/%s\n" % (vars['pwd'], file)
+	vars['backup_made'] = 'Yes'	
+#####</function: backup>#####
+
+#####<function: info>#####
+def info():
+	global vars
+	print "\n\tInformation for the WordPress at %s\n" % vars['pwd']
+	print "\tScript Information"
+        print "\t\t%-25s%s" % ('Blog Title:', vars['blogname'])
+        print "\t\t%-25s%s" % ('Number of Posts:', vars['posts'])
+        print "\t\t%-25s%s" % ('Number of Pages:', vars['pages'])
+        print "\t\t%-25s%s" % ('Permalink:', vars['perma'])
+        print "\tDatabase Information"
+        print "\t\t%-25s%s" % ('Database Name:', vars['dbname'])
+        print "\t\t%-25s%s" % ('Database User:', vars['dbuser'])
+        print "\t\t%-25s%s" % ('Database Password:', vars['dbpass'])
+        print "\t\t%-25s%s" % ('Table Prefix:', vars['pre'])
+        print "\tComment Information"
+        print "\t\t%-25s%s" % ('Normal Comments:', vars['approved'])
+        print "\t\t%-25s%s" % ('Spam Comments:', vars['spam'])
+        print "\t\t%-25s%s" % ('Comments w/ Links:', vars['link'])
+        print "\t\t%-25s%s" % ('Comments w/ HTML:', vars['html'])
+        print "\t\t%-25s%s" % ('Comments w/ Spamwords:', vars['word'])
+        print "\t\t%-25s%s" % ('Trash Comments:', vars['trash'])
+        print "\t\t%-25s%s" % ('Total Comments:', vars['comments'])
+        print "\tURL Information"
+        print "\t\t%-25s%s" % ('Site URL:', vars['site'])
+        print "\t\t%-25s%s" % ('Home URL:', vars['homeurl'])
+        print "\tTheme Information"
+        print "\t\t%-25s%s" % ('Stylesheet:', vars['stylesheet'])
+        print "\t\t%-25s%s" % ('Template:', vars['template'])
+        print "\tActive Plugins"
+	active = deserialize(vars['plug_serial'])
+	inactive = os.walk('wp-content/plugins').next()[1]
+	for p in sorted(active):
+		for i in sorted(inactive):
+			if p.split('/')[0] == i:
+				inactive.remove(i)
+		print "\t\t%s" % p.split('/')[0]
+	print "\tInactive Plugins"
+	for i in sorted(inactive):
+		print "\t\t%s" % i
+	print "\n"
+#####</function: info>#####
+
+#####<function: show_sql>#####
+def show_sql():
+	global vars
+	file1 = vars['config']
+	file2 = "%s.hgtemp" % file1
+	file3 = "%s/index.php" % vars['pwd']
+	file4 = "%s.hgtemp" % file3
+	if os.path.exists(file1) and os.path.exists(file3):
+		shutil.copyfile(file1, file2)
+		shutil.copyfile(file3, file4)
+		f = open(file1, 'a')
+                f.write("\n\ndefine('SAVEQUERIES', true);")
+		f.close()
+		f = open(file3, 'a')
+                f.write("\n\necho '<pre>'; print_r($wpdb->queries); echo '</pre>';")
+		f.close()
+		if os.path.exists('wp-content/cache'):
+			for i in glob.glob('wp-content/cache/*'):
+				if os.path.isdir(i):
+					shutil.rmtree(i)
+				else:
+					os.unlink(i)
+		headers = {'User-Agent':'hg_optimizer'}
+		r = urllib2.urlopen(urllib2.Request(vars['site'], None, headers))
+		code = [x.strip("\n") for x in r.readlines()]
+		r.close()
+		shutil.copyfile(file2, file1)
+		shutil.copyfile(file4, file3)
+		os.unlink(file2)
+		os.unlink(file4)
+	else:
+		perms()
+		sys.exit("\n\nUnable to locate wp-config.php AND index.php. Exiting for safety...\n")
+	i, queries, time, cmd, call = [0, [], 0, [], {}]
+	while (i < len(code)):
+		if re.search("<pre>Array", code[i]):
+			y = i + 1
+			while (y < len(code)):
+				if re.match("</pre>", code[y]):
+					break
+				else:
+					queries.append(code[y])
+				y += 1
+		if len(queries) > 0:
+			break
+		i += 1
+	for line in queries:
+		if re.match("( +)?\[1\] => [0-9]", line):
+			time += float(line.replace(' ','').split('=>')[1])
+		if re.match("( +)?\[0\] => [^A]", line):
+			cmd.append(line.split(' => ')[1])
+		if re.match("( +)?\[2\] => [^A]", line):
+			result = re.findall("(require|include)(_once)?\('([^\']+)'", line)
+			for r in result:
+				file = r[2]
+				if not file in call:
+					call[file] = 1
+				else:
+					call[file] += 1
+	vars['sql_time'] = "%f seconds" % time
+	vars['sql_call'] = call
+	vars['sql_qrys'] = len(cmd)
+	vars['sql_bad_qrys'] = 0
+	vars['sql_bad'] = []
+	for qry in cmd:
+		try:
+			con = MySQLdb.connect(db="%s" % vars['dbname'],
+					      user="%s" % vars['dbuser'],
+					      passwd="%s" % vars['dbpass'])
+			cur = con.cursor()
+			cur.execute(qry)
+			if len(cur.fetchall()) == 0:
+				vars['sql_bad'].append(qry)
+				vars['sql_bad_qrys'] += 1
+			cur.close()
+			con.close()
+		except MySQLdb.OperationalError:
+			vars['sql_bad'].append(qry)
+			vars['sql_bad_qrys'] += 1
+	out = ''
+	theme = 0
+	out += "\nAnalysis of MySQL queries ran when %s loads:\n" % vars['site']
+	out += "\tFile involved in the MySQL queries:\n"
+	for q in sorted(vars['sql_call'], key=vars['sql_call'].get, reverse=True):
+		out += "\t\t%d %s\n" % (vars['sql_call'][q], q)
+		if re.search("/?themes/([^/].+)/", q):
+			theme += vars['sql_call'][q]
+			bad = re.search("/?themes/([^/].+)/", q).group(1)
+	out += "\n\tNumber of valid queries run:\t\t%d\n" % int(vars['sql_qrys'] - vars['sql_bad_qrys'])
+	out += "\tNumber of invalid queries run:\t\t%d\n" % vars['sql_bad_qrys']
+	out += "\tNumber of queries ran:\t\t\t%d\n" % vars['sql_qrys']
+	out += "\tTotal time spent running queries:\t%s\n" % vars['sql_time']
+	if len(vars['sql_bad']) > 0:
+		out += "\n\tBad/Invalid queries detected:\n\n"
+		for b in vars['sql_bad']:
+			out += "\t%s\n" % b
+	if theme > 25:
+		out += "\nAs seen above, the theme %s is making numerous MySQL calls and " % bad
+		out += "should most certainly be looked into. I would recommend either switching "
+		out += "to a less MySQL intensive theme, or contacting the theme's developer "
+		out += "regarding this issue.\n\n"
+		vars['bad_sql_go'] = 1
+	else:
+		out += "\n\n"
+		vars['bad_sql_go'] = 0
+	vars['bad_sql_output'] = out
+#####</function: show_sql>#####
+
+#####<function: htaccess_analysis>#####
+def htaccess_analysis():
+	global vars
+	if os.path.exists('.htaccess'):
+		f = open('.htaccess', 'r')
+		lines = [x.strip("\n") for x in f.readlines()]
+		f.close()
+		for line in lines:
+			if re.search("FileETag none", line) and not re.match("#", line):
+				vars['etag'] = 1
+			if re.search("mod_expires", line) and not re.match("#", line):
+				vars['expires'] = 1
+			if re.search("mod_headers", line) and not re.match("#", line):
+				vars['headers'] = 1
+			if re.search("mod_deflate", line) and not re.match("#", line):
+                                vars['deflate'] = 1
+	if not 'etag' in vars or not 'expires' in vars or not 'headers' in vars or not 'deflate' in vars:
+		vars['etag'] = 0
+		vars['expires'] = 0
+		vars['headers'] = 0
+		vars['deflate'] = 0
+#####</function: htaccess_analysis>#####
+
+#####<function: plugin_analysis>#####
+def plugin_analysis():
+	global vars
+	active_plugs = deserialize(vars['plug_serial'])
+	for plugin in active_plugs:
+		name = plugin.split('/')[0]
+		if name == 'wp-super-cache':
+			vars['cache_type'] = 'WP Super Cache'
+		if name == 'w3-total-cache':
+			vars['cache_type'] = 'W3 Total Cache'
+		if re.search("stat", name):
+			vars['stat'] = 1
+		if re.search("calendar", name):
+			vars['calendar'] = 1
+		if name == 'wp-pagenavi':
+			vars['navi'] = 1
+		if re.search("twitter|fb|facebook|tweet|social|share", name):
+			vars['social'] = 1
+		if re.search("backup", name):
+			vars['wpback'] = 1
+		if name == 'akismet':
+			vars['akismet'] = 1
+		if name == 'bad-behavior':
+			vars['behavior'] = 1
+		if re.search("rss|feed", name):
+			vars['rss'] = 1
+		if re.search("seo", name):
+			vars['seo'] = 1
+			if name == 'wordpress-seo':
+				vars['seo_type'] = 'Yoast'
+		if name == 'ewww-image-optimizer' or name == 'wp-smushit':
+			vars['image'] = 1
+		if re.search("jetpack", name):
+			vars['jetpack'] = 1
+		if re.search("ads", name):
+			vars['ads'] = 1
+		if name == 'wordfence':
+			vars['fence'] = 1
+	if not 'cache_type' in vars:
+		vars['cache_type'] = 'None'
+        if not 'stat' in vars:
+		vars['stat'] = 0
+        if not 'calendar' in vars:
+		vars['calendar'] = 0
+        if not 'navi' in vars:
+		vars['navi'] = 0
+        if not 'social' in vars:
+		vars['social'] = 0
+        if not 'wpback' in vars:
+		vars['wpback'] = 0
+        if not 'akismet' in vars:
+		vars['akismet'] = 0
+        if not 'behavior' in vars:
+		vars['behavior'] = 0
+        if not 'rss' in vars:
+		vars['rss'] = 0
+        if not 'seo' in vars:
+		vars['seo'] = 0
+	if not 'seo_type' in vars:
+		vars['seo_type'] = 'Other'
+        if not 'image' in vars:
+		vars['image'] = 0
+        if not 'jetpack' in vars:
+		vars['jetpack'] = 0
+        if not 'ads' in vars:
+		vars['ads'] = 0
+        if not 'fence' in vars:
+		vars['fence'] = 0
+#####</function: plugin_analysis>#####
+
+#####<function: db_analysis>#####
+def db_analysis():
+	global vars
+	qry = "select table_name, table_rows, DATA_LENGTH from information_schema.tables"
+	qry += " where table_schema='%s' order by table_name" % vars['dbname']
+	warnings.filterwarnings('ignore', category = MySQLdb.Warning)
+        try:
+                con = MySQLdb.connect(db="%s" % vars['dbname'],
+                                      user="%s" % vars['dbuser'],
+                                      passwd="%s" % vars['dbpass'])
+                cur = con.cursor()
+                cur.execute(qry)
+		rows = cur.fetchall()
+                cur.close()
+                con.close()
+        except MySQLdb.Error, e:
+                try:
+                        print "\n\nMySQL Error #%d: %s" % (e.args[0], e.args[1])
+                        sys.exit("\nExiting for safety...\n")
+                except IndexError:
+                        print "\n\nMySQL Error: %s" % str(e)
+                        sys.exit("\nExiting for safety...\n")
+	tbl_rows = {}
+	tbl_size = {}
+	i,total = [0,0]
+	pre = vars['pre']
+	while (i < len(rows)):
+		table = rows[i][0].split(pre)[1]
+		row = rows[i][1]
+		size = rows[i][2]
+		tbl_rows[table] = int(row)
+		tbl_size[table] = int(size)
+		i += 1
+	out = 'Tables in the Database:\n\tTable Name\t\t\tRows\tSize(Bytes)\n'
+        for table in sorted(tbl_rows):
+		out += "\t%-30s\t%i\t%i\n" % (table, tbl_rows[table], tbl_size[table])
+	spam = vars['html'] + vars['link'] + vars['word'] + vars['spam'] + vars['trash']
+	if spam > 10:
+		out += "%i comments appear to be spam-like and should be removed\n" % spam
+		total += spam
+	### Find comment meta entries without matching comment
+	qry1 = "select count(*) from %scommentmeta where comment_id " % pre
+	qry1 += "not in (select comment_id from %scomments)" % pre
+	### Find transient data
+	qry2 = "select count(*) from %soptions where option_value='" % pre
+	qry2 += "%transient%'"
+	### Find unused terms
+	qry3 = "select count(*) from %sterms where term_id in (select" % pre
+	qry3 += " term_id from %sterm_taxonomy where count = 0)" % pre
+	### Find orphaned terms
+	qry4 = "select count(*) from %sterm_taxonomy where term_id not " % pre
+	qry4 += "in (select term_id from wp_terms)"
+	### Find orphaned relationships
+	qry5 = "select count(*) from %sterm_relationships where " % pre
+	qry5 += "term_taxonomy_id not in (select term_taxonomy_id "
+	qry5 += "from wp_term_taxonomy)"
+	### Find number of comments detailing user-agents
+	qry6 = "select count(*) from %scomments where comment_agent != ''" % pre
+	### Find number of revision posts
+	qry7 = "select count(*) from %sposts where post_type='revision'" % pre
+	### Find orphaned postmeta data
+	qry8 = "select count(*) from %spostmeta where post_id not in " % pre
+	qry8 += "(select ID from %sposts)" % pre
+        try:
+                con = MySQLdb.connect(db="%s" % vars['dbname'],
+                                      user="%s" % vars['dbuser'],
+                                      passwd="%s" % vars['dbpass'])
+                cur = con.cursor()
+                cur.execute(qry1)
+                rows = cur.fetchall()
+		orphan_meta = rows[0][0]
+                cur.execute(qry2)
+                rows = cur.fetchall()
+		transient = rows[0][0]
+                cur.execute(qry3)
+                rows = cur.fetchall()
+		unused_terms = rows[0][0]
+                cur.execute(qry4)
+                rows = cur.fetchall()
+		orphan_terms = rows[0][0]
+                cur.execute(qry5)
+                rows = cur.fetchall()
+		orphan_relat = rows[0][0]
+                cur.execute(qry6)
+                rows = cur.fetchall()
+		comm_agents = rows[0][0]
+                cur.execute(qry7)
+                rows = cur.fetchall()
+		revisions = rows[0][0]
+                cur.execute(qry8)
+                rows = cur.fetchall()
+		orphan_postmeta = rows[0][0]
+                cur.close()
+                con.close()
+        except MySQLdb.Error, e:
+                try:
+                        print "\n\nMySQL Error #%d: %s" % (e.args[0], e.args[1])
+                        sys.exit("\nExiting for safety...\n")
+                except IndexError:
+                        print "\n\nMySQL Error: %s" % str(e)
+                        sys.exit("\nExiting for safety...\n")
+	if orphan_meta > 0:
+		out += "Found %i rows of orphaned metadata values that should be removed\n" % orphan_meta
+		total += orphan_meta
+	if transient > 0:
+		out += "Found %i rows of transient data that should be removed\n" % transient
+		total += transient
+	if unused_terms > 0:
+		out += "Found %i rows of unused terminology that should be removed\n" % unused_terms
+		total += unused_terms
+	if orphan_terms > 0:
+		out += "Found %i rows of orphaned terminology that should be removed\n" % orphan_terms
+		total += orphan_terms
+	if orphan_relat > 0:
+		out += "Found %i rows of orphaned relationships that should be removed\n" % orphan_relat
+		total += orphan_relat
+	if comm_agents > 0:
+		out += "Found %i entries in the comment table containing user-agent data" % comm_agents
+		out += " that should be cleared out\n"
+	if revisions > 0:
+		out += "Found %i old revision posts that should be removed\n" % revisions
+		total += revisions
+	if orphan_postmeta > 0:
+		out += "Found %i orphaned postmeta values that should be removed\n" % orphan_postmeta
+		total += orphan_postmeta
+	if total > 0:
+		out += "This equates to %i rows that can be removed from the database!\n" % total
+	if total > 50:
+		vars['db_total'] = "yes"
+	else:
+		vars['db_total'] = "no"
+	vars['db_analysis_out'] = out
+#####</function: db_analysis>#####
+
+#####<function: access>#####
+def access():
+	global vars
+	import bots
+	robots = bots.bots
+	logs = []
+	month = datetime.datetime.now().strftime("%B")[:3]
+	year = datetime.datetime.now().strftime("%Y")
+	if (vars['extended'] == 1):
+		hostname = socket.gethostname()
+		alias = domlog.split('/')[5]
+		end = "/%s/%s-%s-%s.gz" % (cp_user, alias, month, year)
+		if re.match("gator", hostname):
+			domlog_ext = "/home1/apachelogs%s" % end
+		elif re.search("websitewelcome.com$", hostname):
+			domlog_ext = "/home/apachelogs%s" % end
+		else:
+			print "Unable to locate domlog archives, turning of extended mode"
+			extended = 0
+		if (extended == 1):
+			f - gzip.open(domlog_exr, "rb")
+			logs = f.readlines()
+			f.close()
+			logs = [x.strip("\n") for x in logs]
+	if not os.path.exists(vars['domlog']):
+		out = "\n\nThe domlog file does not exist. This kind of points to the site never "
+		out += "getting traffic, including from the one running this script. Try actually"
+		out += " loading the site before running a script to fix all your problems...\n\n"
+		sys.exit(out)
+	f = open(vars['domlog'], "r")
+	lines = [x.strip("\n") for x in f.readlines()]
+	f.close()
+	logs += lines
+	if len(logs) == 0:
+                out = "\n\nThe domlog file is completely empty. This kind of points to the site never "
+                out += "getting traffic, including from the one running this script. Try actually"
+                out += " loading the site before running a script to fix all your problems...\n\n"
+                sys.exit(out)
+	stat,uri,agent,ip,day,hour,i,hits,warnings = [{},{},{},{},{},{},0,0,'']
+	timestart = lines[0].split('[')[1].split(']')[0]
+	timeend = lines[-1].split('[')[1].split(']')[0]
+	while (i < len(logs)):
+		line = logs[i]
+		line_ip = line.split()[0]
+		line_day = line.split('[')[1].split('/')[0]
+		line_hour = line.split(':')[1]
+		line_uri = line.split()[6]
+		line_status = line.split()[8]
+		line_agent = line.split('"')[5]
+		if re.match(vars['dom_path'], line_uri):
+			if not line_day in day:
+				day[line_day] = 1
+			else:
+				day[line_day] += 1
+			time = "%s.%s" % (line_day, line_hour)
+			if not time in hour:
+				hour[time] = 1
+			else:
+				hour[time] += 1
+			if not line_ip in ip:
+				ip[line_ip] = 1
+			else:
+				ip[line_ip] += 1
+			if not line_uri in uri:
+				uri[line_uri] = 1
+			else:
+				uri[line_uri] += 1
+			if not line_status in stat:
+				stat[line_status] = 1
+			else:
+				stat[line_status] += 1
+			if not line_agent in agent:
+				agent[line_agent] = 1
+			else:
+				agent[line_agent] += 1
+			hits += 1
+		
+		i += 1
+	i = 0
+	status_out = 'HTTP Status Codes:\n\tCode\tHits\n'
+	for code in sorted(stat):
+		if (i == 10):
+			break
+		else:
+			per = stat[code] * 100.00 / hits
+			if (per > 20) and (code != '200'):
+				warnings += "HTTP code %s accounts for over 20%s of traffic!\n" % (code, '%')
+			if (per > 20) and (code == '404'):
+				not_found = 1
+			percent = "%s (%.2f" % (str(stat[code]), round(per, 2))
+			percent += "%)"
+			status_out += "\t%s:\t%s\n" % (str(code), percent)
+			i += 1
+	i = 0
+	ip_out = 'Top 10 Hits by IP:\n\tHits\t\tIP\n'
+	ip = collections.OrderedDict(sorted(ip.items(), key=lambda t: t[1], reverse=True))
+	for hit in ip:
+		if (i == 10):
+			break
+		else:
+			per = ip[hit] * 100.00 / hits
+			if per > 20:
+				warnings += "IP %s accounts for over 20%s of traffic!\n" % (hit, '%')
+			percent = "%s (%.2f" % (str(ip[hit]), round(per, 2))
+			percent += "%)"
+			ip_out += "\t%s:\t%s\n" % (percent , hit)
+			i += 1
+	i = 0
+	uri_out = 'Top 10 Requests:\n\tHits\t\tRequest\n'
+	uri = collections.OrderedDict(sorted(uri.items(), key=lambda t: t[1], reverse=True))
+	ajax,xmlrpc,login = [0,0,0]
+	for file in uri:
+                if (i == 10):
+                        break
+                else:
+                        per = uri[file] * 100.00 / hits
+                        if re.search("admin-ajax.php", file):
+                                ajax = per
+                        if re.search("xmlrpc.php", file):
+                                xmlrpc = per
+                        if re.search("wp-login.php", file):
+                                login = per
+			percent = "%s (%.2f" % (str(uri[file]), round(per, 2))
+			percent += "%)"
+			uri_out +=  "\t%s:\t%s\n" % (percent , file)
+			i += 1
+	vars['ajax'] = ajax
+	vars['xmlrpc'] = xmlrpc
+	vars['login'] = login
+	if (ajax  > 10):
+		warnings += 'admin-ajax.php calls account for over 10% of requests!\n'
+		warnings += '\tThis might mean heartbeat is causing harm!\n'
+	if (login  > 10):
+		warnings += 'wp-login.php calls account for over 10% of requests!\n'
+		warnings += '\tThis might be a brute force attempt!\n'
+	if (xmlrpc > 10):
+		warnings += 'xmlrpc.php calls account for over 10% of requests!\n'
+		warnings += '\tThis might be indicative of a XMLRPC flood!\n'
+	i = 0
+	bot_out = 'Bots accounting for over 5% of traffic:\n'
+	agent_out = 'Top 5 User-Agents:\n\tHits\t\tUser-Agent\n'
+	agent = collections.OrderedDict(sorted(agent.items(), key=lambda t: t[1], reverse=True))
+	bad_bots = []
+	vars['killbot'] = ''
+	for ua in agent:
+		if (i == 5):
+			break
+		else:
+			per = agent[ua] * 100.00 / hits
+			percent = "%s (%.2f" % (str(agent[ua]), round(per, 2))
+			percent += '%)'
+			agent_out += "\t%s:\t%s\n" % (percent, ua)
+			for robit in robots:
+				if re.search(robit, ua, re.IGNORECASE) and (per > 5):
+					bot_out += "\t" + robots[robit]
+					bot_out += " " + str(round(per, 2)) + "%\n"
+					bad_bots.append(robit)
+					vars['killbot'] += "%s, " % robots[robit]
+			i += 1
+	bot_out += "\n\tYou might wish to limit the crawl rate or straight up block them\n"
+	day_out = 'Traffic per Day:\n\tDay\t\tHits\n'
+	for num in sorted(day):
+		per = day[num] * 100.00 / hits
+		percent = "%s (%.2f" % (str(day[num]), round(per, 2))
+		percent += '%)'
+		day_out += "\t%s %s:\t\t%s\n" % (str(month), str(num), percent)
+	hour_out = 'Traffic per Hour:\n\tDay\tHour\t\tHits\n'
+	for hr in sorted(hour):
+		d = hr.split('.')[0]
+		h = hr.split('.')[1]
+		begin = "\t%s %s\t%s" % (str(month), str(d), str(h))
+		per = hour[hr] * 100.00 / hits
+		percent = "\t\t%s (%.2f" % (str(hour[hr]), round(per, 2))
+                percent += '%)\n'
+		hour_out += begin + percent
+	begin = 'Domlog Analysis ranging from %s to %s' % (timestart, timeend)
+	vars['access_out'] = {}
+	vars['access_out'][0] = "%s\n\n%s\n%s\n%s\n\nTotal Hits: %d" % (begin, ip_out, uri_out, status_out, hits)
+	vars['access_out'][1] = "%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n\nTotal Hits: %d" % \
+			(begin, ip_out, uri_out, status_out, agent_out, bot_out, day_out, hits)
+	vars['access_out'][2] = "%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n\nTotal Hits: %d" % \
+                        (begin, ip_out, uri_out, status_out, agent_out, bot_out, hour_out, hits)
+	vars['bot_out'] = bot_out
+	vars['warnings'] = warnings
+#####</function: access>#####
+
+#####<function: analysis>#####
+def analysis():
+	global vars
+	access()
+	db_analysis()
+	plugin_analysis()
+	htaccess_analysis()
+	show_sql()
+	start = "With WordPress being the most popular CMS out there, and with the world revolving "
+	start += "around speed and efficiency, it is no surprise optimizing WordPress is a huge "
+	start += "topic. I have compiled together many tips, tricks, and suggestions that help to "
+	start += "make a WordPress great to assist in the process. Keep in mind not all these tips "
+	start += "will work for all WordPress sites. These are a general things that have been tested "
+	start += "and proven to work on the majority of sites (please keep in mind they are in no "
+	start += "particular order).\n\n"
+	start += "WordPress is extremely database driven. Nearly any change you make in your wp-admin "
+	start += "panel will cause a change in the database. Every comment, user-registration, and post "
+	start += "edit inserts or edits the database. As such, it is extremely important you keep the "
+	start += "database repaired and optimized as often as possible. To do this, login to the cPanel "
+	start += "and then select phpMyAdmin. Next you are going to select your database on the left hand "
+	start += "side. From there, locate the small check box right after the list of tables that says "
+	start += "'Check All' and click it. Then select 'Repair table' from the drop down. Now re-select " 
+	start += "the database and once again locate the small checkbox that says 'Check All' and click "
+	start += "it. This time, select 'Optimize table' from the drop down.\n\n"
+	start += "The wp-admin panel can be a resource hog. As such, you want to, ideally, spend as little "
+	start += "time as possible in the wp-admin panel. To achieve this, WordPress generally recommends "
+	start += "you write up your posts offline (in something like a Notepad or Word document or "
+	start += "whatever you prefer). When you are doing writing it up, copy the content and then open "
+	start += "the wp-admin panel and paste the content into the post editor. Make the tweaks needed, "
+	start += "then publish the post. Never, ever make posts via email, auto-bloggers, and other such "
+	start += "means. They are resource killers. The wp-admin panel has many features in it that drive "
+	start += "up resource usage. Such things as heartbeat and auto-saving drive up CPU and Memory usage "
+	start += "the more they are used. Thus, reduce this usage and reduce the overall impact of the "
+	start += "site.\n\n"
+	start += "WordPress, the themes you use, the plugins you use, they all update from time to time. "
+	start += "WordPress recommends keeping everything as updated as possible. Luckily, this is not a "
+	start += "terrible inconvenience. Log into your wp-admin panel, the locate the Update sub-section "
+	start += "on the left hand side. On this page, you will see any notifications concerning updating "
+	start += "the contents of your site. Most updates contain patches to fix issues found through the "
+	start += "use of the version of the software. These updates often contain security patches. But "
+	start += "they also contain updates to improve site performance. Thus, keeping things updated will "
+	start += "ensure no one can utilize known holes in the software as well as keep it running as well "
+	start += "as intended.\n\n"
+	start += "Knowing the SQL calls being made and where they are stemming from is a very great bit of "
+	start += "knowledge to have. There is a wonderful plugin called Debug Queries that will allow you "
+	start += "to determine just this. When enabled, it displays all the SQL queries run for the site in "
+	start += "the footer of the page (ie the bottom). What this does is allow you to see the tim each "
+	start += "query takes and where it is stemming from. This let's you see where drags occur and what "
+	start += "is running so you can dig into them. Sadly, this does mean some intimate SQL coding "
+	start += "knowledge is going to be required. If this is something you need assistance with, a good "
+	start += "SQL developer could certainly knock it out for you. Please note: If you use this plugin, "
+	start += "turn it off when you are done! It can potentially display senstive information!\n\n"
+        end = "A Content Delivery Network (commonly known as a CDN) is a great tool to optimize a site. "
+        end += "A CDN is a large distributed system of servers deployed in multiple data centers across "
+        end += "the internet, which has the goal to serve content to end-users with high availability and "
+        end += "high performance. This means it caches your site across many locations to make it load "
+        end += "quicker via multiple locations all around the world. Add this with the improved caching "
+        end += "systems and attack mitigation techniques they employ, it makes it a fantastic means to "
+        end += "assist your site. Through research and diligent testing, I am able to provide an excellent "
+        end += "CDN option that is free of charge for the base level package. This CDN is named Incapsula. "
+        end += "It has been found to save around 50% on bandwidth usage, provides weekly reports on the "
+        end += "sites using it, can mitigate non-google bot traffic, allows for country/region blocking, "
+        end += "and has a feature for extended authentication for protected pages. It truly is a solid CDN, "
+        end += "and one most certainly worth looking into. You can find more information about Incapsula via "
+        end += "http://www.incapsula.com/\n\n"
+	end += "Please keep in mind that these are merely suggestions based on what your current "
+	end += "WordPress installation has running on it. Every WordPress is unique, and there may "
+	end += "settings or tweaks not detected that make the above statements less true for your "
+	end += "WordPress. Before making any changes, it is highly recommended a full site backup "
+	end += "is generated to ensure you can revert back to the current stage if needed. \n\n"
+	end += "We can certainly understand how overwhelming this all can be, and apologize for "
+	end += "the length of the reply. To assist you with this, we are able and willing to do "
+	end += "the following for you if applicable to your WordPress:\n"
+	end += "    - Utilize Apache module coding\n"
+	end += "    - Convert the wp-cron.php into a Linux Cron job\n"
+	end += "    - Optimize the wp-config.php settings\n"
+	end += "    - Doing a repair and optimize on the database\n"
+	end += "    - Removing inactive plugins and un-used themes\n"
+	end += "    - Installing EWWW Image Optimization\n"
+	end += "    - Installing and configuring WP Super Cache\n"
+	end += "    - Installing WP-Page-Navi\n"
+	end += "    - Install and configure the Yoast SEO plugin\n"
+	end += "    - Install Bad Behavior and Akismet (please note you will have to configure "
+	end += "Akismet and obtain the free API key, as we cannot do that for you)\n"
+	end += "    - Clean out all invalid database entries to shorten the number of rows\n"
+	end += "    - Remove all non-admin users from the database\n"
+	end += "    - Remove all spam comments, and ones showing signs of being spam-like\n"
+	end += "If you would like any of the above mentioned items done, please reply back "
+	end += "letting us know and we would be more than happy to do so for you!\n\n"
+	end += "In the interest of covering optimization to it's fullest, there are some things "
+	end += "I would highly recommend doing, but that we are, sadly, unable to do for you. "
+	end += "Such things would be (please note not all of these might apply to your "
+	end += "WordPress):\n"
+	end += "    - Update the WordPress, the themes, and the plugins to the latest releases\n"
+	end += "    - Implement a CDN onto the site itself\n"
+	end += "    - Utilize 'best posting practices' when making posts on your WordPress\n"
+	end += "    - Utilize FeedBurner to handle RSS Feeds for your site\n"
+	end += "While we do wish we could do all of thise for you, sadly this all would be ideas "
+	end += "that we are simply unable to complete for you. I do sincerely apologize for any "
+	end += "inconvenience that may cause you.\n\n"
+	end += "Please do let us know how you would like to proceed with the optimization of your "
+	end += "WordPress site %s . If you have any questions, comments, concerns, " % vars['site']
+	end += "or anything you would like addressed, please do feel free to reply back letting us"
+	end += " know!\n\n"
+	mid = ''
+	if vars['fence'] == 1:
+		mid += "With security being such a big deal, it is understandable that you would want a security plugin such "
+	        mid += "as WordFence. Under normal circumstances, Akismet and Bad Behavior can more than cover your security "
+	        mid += "needs. However, if you are finding they are not quite enough, WordFence is a good choice. While it is "
+	        mid += "usually recommended to remove the plugin entirely, if you do wish to keep it, you will need to ensure "
+	        mid += "you disable the Live Traffic setting, as it is known to cause both site speed issues and resource "
+	        mid += "usage issues. \n\n"
+	if vars['ads'] == 1:
+                mid += "Simple Ads Manager does indeed make managing the ads that appear on your WordPress simple. It "
+                mid += "offers a plethura of options and abilities, and is generally recommended when compared to its "
+                mid += "competitors. Any ad plugin can be resource intensive, so it is generally recommended you disable "
+                mid += "and remove them if at all possible. However, if you do wish to continue using Simple Ads Manager, "
+                mid += "you will need to ensure it is updated to the most recent release and you change how the ads are "
+                mid += "handled. By default, they are handled via PHP, which is not cached. Thus, you will want to ensure "
+                mid += "you switch the ad management to use Javascript to ensure they are cached and consuming as little "
+                mid += "resources as possible.\n\n"
+	if vars['calendar'] == 1:
+        	mid += "Calendar plugins can be quite useful for helping both yourself and your site's visitors know of what "
+        	mid += "all is going on. The downside to them is they spawn a huge number of pages on your site, each of "
+        	mid += "which consume additional resources to load. This is made even worse when bots and crawlers are "
+        	mid += "into play, as they will crawl and scrape every single page the Calendar plugin made. Even if you are "
+        	mid += "not making many events, every date (as far as the plugin has on it) is a page. I would highly "
+        	mid += "recommend disabling and removing the plugin, and looking towards something more along the lines of "
+        	mid += "static HTML content to handle this. \n\n" 
+	if vars['jetpack'] == 1:
+        	mid += "Jetpack is a seemingly great plugin. The developers of the plugin like to boast at just how much the "
+        	mid += "plugin can truly do. The problem, however, lies in how very much it can do. It does so very much it "
+        	mid += "quickly becomes detrimental to the site itself. It harms load times and proves to be a high resource "
+        	mid += "consuming script rather quicky. Because of how very harmful it can be, I would highly recommend "
+        	mid += "disabling the plugin and removing it completely from your site.\n\n"
+	if vars['rss'] == 1:
+        	mid += "Increasingly popular, RSS feeds make keeping up-to-date with a blog/news/etc. easier and easier. "
+        	mid += "They are also a backdoor to resource usage. Luckily, there is a super simple solution to managing "
+        	mid += "these. It is called FeedBurner, and it is a wonderful utility from our favorite Search Engine, "
+        	mid += "Google. More info can be found via this http://feedburner.com/ \n\n" 
+	if vars['seo'] == 1 and vars['seo_type'] == 'Yoast':
+        	mid += "I am seeing you are using the Yoast SEO plugin currently. This is an excellent SEO plugin to utilize "
+        	mid += "for many reasons. For the best effect and minimum resource usage, please ensure you are using the "
+        	mid += "following settings:\n"
+        	mid += "\tSEO > Titles & Metas > General > Noindex, follow subpages of archives\n"
+        	mid += "\tSEO > Titles & Metas > Other > Author Archives > noindex, nofollow\n"
+        	mid += "\tSEO > Titles & Metas > Other > Author Archives > Disable the author archives\n"
+        	mid += "\tSEO > Titles & Metas > Other > Date Archives > noindex, follow\n"
+        	mid += "\tSEO > Titles & Metas > Other > Date Archives > Disable the date-based archives\n"
+        	mid += "\tSEO > Titles & Metas > Other > Special Pages > Enter special pages if applicable\n\n"
+	elif vars['seo'] == 1:
+        	mid += "SEO (search engine optimization) is a huge topic on the internet today. As such, there "
+        	mid += "is a ton of methods to getting better SEO. WordPress offers plugins to manage these, "
+        	mid += "and the vast majority of the WordPress sites on the interwebs today. Sadly, the vast "
+        	mid += "majority of these plugins have been found to be terrible for the efficiency of the "
+        	mid += "site. Does this mean you should avoid SEO plugins? Not at all! You just need the right "
+        	mid += "one. After playing around with them, I found Yoast to be one of the best plugins for "
+        	mid += "the job while not overusing server resources. You can find a guide to optimizing Yoast "
+        	mid += "easily via Google by the developer, but there are some general settings I recommend: \n "
+        	mid += "\tSEO > Titles & Metas > General > Noindex, follow subpages of archives \n "
+        	mid += "\tSEO > Titles & Metas > Other > Author Archives > noindex, nofollow \n "
+        	mid += "\tSEO > Titles & Metas > Other > Author Archives > Disable the author archives \n "
+        	mid += "\tSEO > Titles & Metas > Other > Date Archives > noindex, follow \n "
+        	mid += "\tSEO > Titles & Metas > Other > Date Archives > Disable the date-based archives \n "
+        	mid += "\tSEO > Titles & Metas > Other > Special Pages > Enter special pages if applicable \n "
+        	mid += "So why Yoast? For one, it is supported by the developer. This is getting increasingly "
+        	mid += "rare for some reason. Yoast also boasts a built-in Sitemap, reducing the need for a "
+        	mid += "sitemap plugin or the need to manually make one. Another solid reason, Yoast preaches "
+        	mid += "about the use of following the 'less is more' philosophy when it comes to tagging, "
+        	mid += "which is a fantastic philosophy. It also is not near as database driven as its "
+        	mid += "competitors, which just makes the site that much faster. \n\n"
+	if vars['image'] == 0:
+        	mid += "The vast majority of sites use images. More recently, the kings of site optimization "
+        	mid += "(namely Yahoo, Google, and GtMetrix) are preaching the merits of compressing images and "
+        	mid += "converting them into progressive jpegs. This means the base layer of the image renders "
+        	mid += "first, then the image \ focuses\  to load the rest of the image. This makes them load "
+        	mid += "faster and better. Luckily, you don't need to know all the ins and outs of image "
+        	mid += "conversion for your WordPress. There is a fantastic Image Optimization plugin available "
+        	mid += "known as EWWW Image Optimizer. The name might put you off, but through thorough testing, " 
+        	mid += "I have found the plugin to work better than the rest without driving up resource usage. "
+         	mid += "It will ensure your images are using the optimum settings so you don't have to worry about "
+         	mid += "them. You can even use a bulk optimizer to optimize all the previous images on your WordPress "
+        	mid += "via the wp-admin panel. I would recommend downloading and utilizing this plugin ASAP. \n\n"
+	if vars['stat'] == 1:
+        	mid += "While wanting to know your site's traffic and statistics is a great idea, implementing "
+        	mid += "it via plugins can be disastrous. If you are utilizing cPanel as your control panel, "
+        	mid += "chances are you have either AwStats, Google Analytics, or Logaholic to keep track of "
+        	mid += "your traffic. Thus, don't double work the statistics. Let cPanel handle that, its "
+        	mid += "quicker and already being done anyway. Logging traffic can be hard on a server. If you "
+        	mid += "already have one application doing it, having another is just wasteful to the server's "
+        	mid += "resources. The statistic plug(s) I detected were \n\n"
+	if vars['navi'] == 1:
+        	mid += "Duplicate content can be a terrible burden on a site. It can be even worse if the "
+        	mid += "duplicate content is stemming from something common to each page, like navigation "
+        	mid += "content. The WP Navi plugin does a fantastic job of removing duplicate content and " 
+        	mid += "managing the navigation content to ensure what loads is original. It is a great "
+        	mid += "plugin every site can benefit from. As it helps to fight duplicate content, this " 
+        	mid += "plugin is a must to help your sites load time.\n\n"
+	if vars['social'] == 1:
+        	mid += "While a wonderful idea that really helps spread your site's content and bring it to "
+        	mid += "the forefront, these plugins can be resource intensive if not configured to their "
+        	mid += "fullest or when used in excess. If at all possible, you might wish to review the "
+        	mid += "documentation for your social media plugins and ensure there is nothing that could "
+        	mid += "cause any excess resource of their part. Most often, you can replace these entirely by "
+        	mid += "utilizing the very coding from the social media sites (ie Facebook, Twitter, etc.) "
+        	mid += "themselves. Due to them making numerous external calls, Social Media plugins drive up "
+        	mid += "load times and resource usage. They can get even worse when done per post or per page. " 
+        	mid += "Ideally, you want them removed. If not possible, you want them not grabbing info from "
+        	mid += "the Social Media sites.\n\n"
+	if vars['wpback'] == 1:
+        	mid += "Part of best practices is keeping an up-to-date backup available. Following this, it "
+        	mid += "makes logical sense to have a WordPress plugin do it for you. Sadly, this is not the "
+        	mid += "best of plans as these plugins (and the whole backup process for that matter) are quite "
+        	mid += "resource intensive. The best thing to do is generate one manually when you need an "
+        	mid += "updated backup. Doing this will prevent resource usage spikes during uncontrolled "
+        	mid += "times, and usually manual backups are easier on the server to generate. The process of "
+        	mid += "backing up content requires quite a bit of server-side resources. As such, having it "
+        	mid += "automated via a plugin causes even more issues since the automation process adds to "
+        	mid += "this resource usage.\n\n"
+	if vars['deflate'] == 0 or vars['expires'] == 0 or vars['headers'] == 0 or vars['etag'] == 0:
+		mid += "Apache. Apache has many modules running in it to change how sites behave, as well as "
+		mid += "how browsers handle the sites. Three fantastic modules are mod_expires, mod_deflate, "
+		mid += "and mod_headers. The vast majority of Apache compilations have these ready to use, so "
+		mid += "why not use them? The coding generally recommended is:\n\n"
+		mid += "FileETag none\n"
+		mid += "<IfModule mod_expires.c>\n"
+		mid += "<IfModule mod_headers.c>\n"
+		mid += "     ExpiresActive On\n"
+		mid += "     ExpiresDefault A0\n"
+		mid += "     ExpiresDefault  access plus 1 month \n"
+		mid += "     ExpiresByType image/x-icon  access plus 1 year \n"
+		mid += "     ExpiresByType image/gif  access plus 1 month \n"
+		mid += "     ExpiresByType image/png  access plus 1 month \n"
+		mid += "     ExpiresByType image/jpg  access plus 1 month \n"
+		mid += "     ExpiresByType image/jpeg  access plus 1 month \n"
+		mid += "     ExpiresByType text/css  access 1 month \n"
+		mid += "     ExpiresByType application/javascript  access plus 1 year \n"
+		mid += "     <FilesMatch  \\.(flv|ico|pdf|avi|mov|ppt|doc|mp3|wmv|wav)$ >\n"
+		mid += "          ExpiresDefault A29030400\n"
+		mid += "          Header append Cache-Control  public \n"
+		mid += "     </FilesMatch>\n"
+		mid += "     <FilesMatch  \\.(gif|jpg|jpeg|png|swf)$ >\n"
+		mid += "          Header append Cache-Control  public \n"
+		mid += "     </FilesMatch>\n"
+		mid += "     <FilesMatch  \\.(xml|txt|html|js|css)$ >\n"
+		mid += "          Header append Cache-Control  proxy-revalidate \n"
+		mid += "     </FilesMatch>\n"
+		mid += "     <FilesMatch  \\.(php|cgi|pl|htm)$ >\n"
+		mid += "          ExpiresActive Off\n"
+		mid += "          Header set Cache-Control  private, no-cache, no-store, proxy-revalidate, no-transform \n"
+		mid += "          Header set Pragma  no-cache \n"
+		mid += "     </FilesMatch>\n"
+		mid += "</IfModule>\n"
+		mid += "</IfModule>\n"
+		mid += "<IfModule mod_deflate.c>\n"
+		mid += "     SetOutputFilter DEFLATE\n"
+		mid += "     BrowserMatch ^Mozilla/4 gzip-only-text/html\n"
+		mid += "     BrowserMatch ^Mozilla/4\\.0[678] no-gzip\n"
+		mid += "     BrowserMatch \\bMSI[E] !no-gzip !gzip-only-text/html\n"
+		mid += "     SetEnvIfNoCase Request_URI \\\n"
+		mid += "     \\.(?:gif|jpe?g|png)$ no-gzip dont-vary\n"
+		mid += "     Header append Vary User-Agent env=!dont-vary\n"
+		mid += "</IfModule>\n"
+		mid += "All this coding does some wonderful things. It leverages browser caching, which means "
+		mid += "it has the browser work towards caching as well as the site itself. It disables ETags, "
+		mid += "which Google Pagespeed raves against. The exact cache timings are from the Apache "
+		mid += "federation, so you know its 'battle-tested'. Combining all of these together will "
+		mid += "make subsequent visits to your site quicker and less intensive on the server's "
+		mid += "resources.\n\n"
+	if vars['cron'] == 'Enabled':
+        	mid += "By default, every time someone loads your site, the wp-cron.php file is run. Most of "
+        	mid += "the time, this isn't harmful. But if your wp-cron.php file is set to do some intense "
+        	mid += "tasks, this can drive up resource usage. Thus, you should convert the wp-cron.php task "
+        	mid += "into a Linux cron job. This is actually easier than you think. You simply need to have "
+        	mid += "the Linux cron job utilize wget once an hour on the file via your URL. So let us say "
+        	mid += "you URL is http://example.com . Then the URL need to call would be  "
+        	mid += "http://example.com/wp-cron.php?doing_wp_cron . Since you don't want a million emails "
+        	mid += "letting you know it run, you want to add 2>&1 at the end. Then we just want to call "
+        	mid += "that via wget quietly. Since we only want it running once per hour, the coding for the "
+        	mid += "cron job becomes: \n "
+        	mid += "\t0 * * * * /usr/bin/wget -q -O - http://example.com/wp-cron.php?doing_wp_cron 2>&1 \n "
+        	mid += "Add that as a Linux cron job, then add the following to your wp-config.php file: \n "
+        	mid += "\tdefine( 'DISABLE_WP_CRON', true ); \n "
+        	mid += "This will ensure the tasks still run without overdoing it. This reduces the resource "
+        	mid += "usage overhead. This makes the site load faster without harming the server.\n"
+		mid += "Because of all that the wp-cron.php file does, there are some important questions to "
+		mid += "keep in mind when setting up the timing of it running. For example, if you schedule "
+		mid += "posts or taks to occur at 07:00, then you would want to set the cron to run at 07:05 "
+		mid += "to ensure this still occurs. As such, if you have anything that runs via a schedule, "
+		mid += "then it would be best to ensure the cron itself runs 5-10 minutes after the schedule.\n\n"
+	if vars['akismet'] == 0 or vars['behavior'] == 0:
+		mid += "It can be difficult to fully prevent spammers, as the malicious users that send out "
+		mid += "these comments/registrations/etc are constantly changing the methodology behind the "
+		mid += "idea. All the spam comments and the like drive up resource usage, database sizes, and "
+		mid += "the like. To summarize it, spammers are bad. Thus, fighting them is a great idea. After "
+		mid += "much testing, I have found the best way to fight spammers is a combination effort from "
+		mid += "the plugins Akismet and Bad Behavior. They fight on two levels to stop spammers from "
+		mid += "visiting your site and from abusing your site. Due the heightened resource usage "
+		mid += "spammers can cause, you most certainly want to fight them in any way possible. "
+		mid += "Utilizing Akismet and Bad Behavior, you can do just that. No spammers means no resource "
+		mid += "usage and abuse caused from the spammers, so it really is a beneficial decision.\n\n"
+	if vars['posts'] > 1500:
+        	mid += "Due to the high number of posts, you should expect performance to decline. WordPress "
+        	mid += "tends to have performance issues when the number of posts go above 1500 posts. This may "
+        	mid += "not be true for this WordPress, as a highly optimized WordPress could handle it. Might "
+        	mid += "still wish to reduce the amount of posts.\n\n"
+	if vars['cache'] == 'true'  and vars['posts'] > 500:
+        	mid += "With the high number of posts, caching could actually be detrimental in this case. Does "
+        	mid += "not mean it necessarily is, but caution should be utilized in this case.\n\n"
+	if vars['cache'] == 'true' and vars['cache_type'] == 'WP Super Cache':
+        	mid += "I am seeing you are using WP Super Cache as your caching plugin. WP Super Cache is a "
+        	mid += "fantastic caching plugin, both for caching purposes and to resource usage levels. I am "
+        	mid += "going to recommend you look through your settings and ensure the following are being "
+        	mid += "used: \n"
+        	mid += "\t1) cache_mod_rewrite = 1 \n "
+        	mid += "\t2) cache_time_interval = '3600' \n "
+        	mid += "\t3) cache_max_time = '3600' \n "
+        	mid += "\t4) cache_late_init = 1 \n "
+        	mid += "\t5) cache_rejected_user_agent = array ( 0 => '', ) \n "
+        	mid += "\t6) The rest of the settings should be left at default \n"
+        	mid += "You can edit those settings via the wp-cache-config.php file or via the Settings in the "
+        	mid += "wp-admin panel. \n\n "
+	elif vars['cache'] == 'true' and vars['cache_type'] != 'WP Super Cache':
+        	mid += "I am seeing you are using a caching plugin other than WP Super Cache. I would recommend "
+        	mid += "changing the caching plugin you are using over to WP Super Cache. This is becsuse WP Super Cache is a "
+        	mid += "fantastic caching plugin, both for caching purposes and to resource usage levels. I am "
+        	mid += "going to recommend you switch to it and ensure the following settings are being "
+        	mid += "used: \n "
+        	mid += "\\t1) cache_mod_rewrite = 1 \n "
+        	mid += "\t2) cache_time_interval = '3600' \n "
+        	mid += "\t3) cache_max_time = '3600' \n "
+        	mid += "\t4) cache_late_init = 1 \n "
+        	mid += "\t5) cache_rejected_user_agent = array ( 0 => '', ) \n "
+        	mid += "\t6) The rest of the settings should be left at default \n "
+        	mid += "You can edit those settings via the wp-cache-config.php file or via the Settings in the "
+        	mid += "wp-admin panel.\n\n"
+	elif vars['cache'] == 'false' and vars['posts'] < 500:
+        	mid += "Caching is, in most cases, highly important to the speed and proficiency of any site. "
+        	mid += "As such, your WordPress can benefit greatly from a good caching plugin. We recommend WP "
+        	mid += "Super Cache, as it is one of the best caching plugins while also not resource intensive "
+        	mid += "when configured properly. In addition to being a great caching plugin, it can also be " 
+        	mid += "configured to implement Expire Headers and other site optimization techniques. You can "
+        	mid += "read more on WP Super Cache via https://wordpress.org/plugins/wp-super-cache/ \n"
+        	mid += "The cache settings I recommend for Super Cache are: \n"
+        	mid += "\t1) cache_mod_rewrite = 1 \n"
+        	mid += "\t2) cache_time_interval = '3600' \n"
+        	mid += "\t3) cache_max_time = '3600' \n"
+        	mid += "\t4) cache_late_init = 1 \n"
+        	mid += "\t5) cache_rejected_user_agent = array ( 0 => '', ) \n"
+        	mid += "\t6) The rest of the settings should be left at default \n"
+        	mid += "You can edit those settings via the wp-cache-config.php file or via the Settings in the "
+        	mid += "wp-admin panel.\n\n"
+	if vars['java'] == 'true' or vars['autosave'] < 1800:
+		mid += "Working on all the content is one solid method to getting the site sped up, however "
+		mid += "there are two things you can do to speed up any WordPress and reduce its resource "
+		mid += "usage. Within the wp-config.php file, add the following coding: \n"
+		mid += "\tdefine( 'AUTOSAVE_INTERVAL', 3600 ); \n"
+		mid += "\tdefine( 'CONCATENATE_SCRIPTS', false ); \n"
+		mid += "The first line of coding will turn the WordPress Auto-save feature from a recurring 30 "
+		mid += "second process to a recurring hourly process. This will assist in lowering the resource "
+		mid += "usage being consumed while in the wp-admin panel. The second line of coding will "
+		mid += "disable the concatenation of Javascript in the wp-admin panel. What this means is it "
+		mid += "stops WordPress from loading all the Javascript coding for every page. While a great "
+		mid += "idea, this can also result in a 'laggy' wp-admin area, stop certain functions from "
+		mid += "working, and cause resource usage to sky-rocket.\n\n"
+	if vars['db_total'] == 'yes':
+		mid += "I am seeing the database itself could use a fair bit of optimization. I have done a "
+		mid += "analysis on the database and have found the following information:\n\n"
+		mid += vars['db_analysis_out']
+		mid += "\n\n"
+	if vars['bad_sql_go'] == 1:
+		mid += vars['bad_sql_output']
+	if len(vars['bot_out']) > 107:
+		mid += "After analyzing the traffic of the site, I did find a bit of a bot problem. "
+		mid += vars['bot_out']
+		mid += "\n"
+	if vars['warnings'] != '':
+		mid += "While analyzing the traffic of the site, I found some poetential issues occuring "
+		mid += "that are worth mentioning:\n\n"
+		mid += vars['warnings']
+		mid += "\nThese are potential issues damagaing the sites load times, as well as consuming "
+		mid += "higher levels of resources, so you might wish to look into resolving those.\n\n"
+	vars['analyze_out'] = start + mid + end
+#####</function: analysis>#####
+
+#####</function: convert_cron>#####
+def convert_cron():
+	global vars
+	cronfile = "/var/spool/cron/%s" % vars['cp_user']
+	cmd = vars['site'] + "/wp-cron.php"
+	cmd = cmd.replace("//wp-cron.php", "/wp-cron.php")
+	if os.path.exists(cronfile):
+		f = open(cronfile)
+		lines = [x.strip("\n") for x in f.readlines()]
+		f.close()
+		for line in lines:
+			if re.search(cmd, line) and not re.match('#', line):
+				print '\n\nThere is already a cron job for this.'
+				perms()
+				sys.exit("\n")
+		orig = "%s/%s_crontab.orig" % (vars['pwd'], vars['cp_user'])
+		i = 1
+		while os.path.exists(orig):
+			orig = "%s/%s_crontab.%i.orig" % (vars['pwd'], vars['cp_user'], i)
+			i += 1
+		shutil.copyfile(cronfile, orig)
+		print 'Original crontab file located and copied to %s' % orig
+	cmd = "/usr/bin/wget -q -O - %s?doing_wp_cron 2>&1" % cmd
+	options = 'Which options would you like to use?\n'
+	options += '1 Run every hour on the hour\n'
+	options += '2 Run every hour on the half hour\n'
+	options += '3 Run every hour on the 5 minute mark\n'
+	options += 'If you want a custom option, select an option '
+	options += 'and then manually edit the cron file with crontab -eu %s\n' % vars['cp_user']
+	ans = ''
+	while not re.match("[1-3]$", ans):
+		ans = raw_input(options)
+		if not re.match("[1-3]$", ans):
+			print 'That is not a valid option\n'
+	if int(ans) == 1:
+		time = '0 * * * *'
+	elif int(ans) == 2:
+		time = '30 * * * *'
+	else:
+		time = '5 * * * *'
+	cmd = "%s %s\n" % (time, cmd)
+	f = open(cronfile, 'a')
+	f.write(cmd)
+	f.close()
+	disable = "\n\n//Added by the hg_optimizer\ndefine('DISABLE_WP_CRON', true);\n"
+	f = open(vars['config'],'r')
+	lines = [x.strip("\n") for x in f.readlines()]
+	f.close()
+	i,index = [0,0]
+        for line in lines:
+                if re.search("NONCE_SALT", line):
+                        index = i + 3
+                if re.match("( +)?\$table_prefix", line):
+                        index = i + 1
+                if re.search("Happy blogging ", line):
+                        index = i + 1
+                if re.search("//Added by the hg_optimizer", line):
+                        index = i + 1
+                        break
+                i += 1
+	if index == 0:
+		print "\n\nwp-config.php seems abnormal, do this manually"
+		perms()
+		sys.exit("\n")
+	lines.insert(index, disable)
+	new = ''
+	for  line in lines:
+                new += "%s\n" % line
+	f = open(vars['config'], "w")
+	f.write(new)
+	f.close()
+	print "\twp-cron.php converted into a Linux cron job"
+	print "\tYou should manually check both %s and %s" % (cronfile, vars['config'])
+#####</function: convert_cron>#####
+
+#####<function opt_config>#####
+def opt_config():
+	global vars
+	change = "\n\n//Added by the hg_optimizer\ndefine( 'CONCATENATE_SCRIPTS', false );"
+	change += "\ndefine( 'AUTOSAVE_INTERVAL', 3600 );\n"
+	f = open(vars['config'])
+	lines = [x.strip("\n") for x in f.readlines()]
+	f.close()
+	i,index = [0,0]
+	for line in lines:
+                if re.search("NONCE_SALT", line):
+                        index = i + 3
+                if re.match("( +)?\$table_prefix", line):
+                        index = i + 1
+                if re.search("Happy blogging ", line):
+                        index = i + 1
+		if re.search("//Added by the hg_optimizer", line):
+			index = i + 2
+			break
+                i += 1
+        if index == 0:
+                print "\n\nwp-config.php seems abnormal, do this manually"
+		perms()
+		sys.exit("\n")
+	lines.insert(index, change)
+	new = ''
+	for line in lines:
+		new += "%s\n" % line
+	f = open(vars['config'], "w")
+	f.write(new)
+	f.close()
+#####</function opt_config>#####
+
+#####<function: db_clean>#####
+def db_clean():
+	global vars
+	ans = raw_input("\nDo you wish to remove all users except for those with admin privileges? (y/n)\n")
+	valid = 'false'
+	while valid == 'false':
+		if ans != 'yes' or ans != 'y' or ans != 'n' or ans != 'no':
+                        valid = 'true'
+		else:
+			print "That is not a valid answer, you must enter one of the following:"
+			print "\tyes"
+	                print "\ty"
+	                print "\tno"
+	                print "\tn\n"
+			ans = raw_input("\nDo you wish to remove all users except for those with admin privileges? (y/n)\n")
+	pre = vars['pre']
+        ### Find comment meta entries without matching comment
+        qry1 = "delete from %scommentmeta where comment_id " % pre
+        qry1 += "not in (select comment_id from %scomments)" % pre
+        ### Find transient data
+        qry2 = "delete from %soptions where option_value='" % pre
+        qry2 += "%transient%'"
+        ### Find unused terms
+        qry3 = "delete from %sterms where term_id in (select" % pre
+        qry3 += " term_id from %sterm_taxonomy where count = 0)" % pre
+        ### Find orphaned terms
+        qry4 = "delete from %sterm_taxonomy where term_id not " % pre
+        qry4 += "in (select term_id from wp_terms)"
+        ### Find orphaned relationships
+        qry5 = "delete from %sterm_relationships where " % pre
+        qry5 += "term_taxonomy_id not in (select term_taxonomy_id "
+        qry5 += "from wp_term_taxonomy)"
+        ### Find number of comments detailing user-agents
+        qry6 = "delete from %scomments where comment_agent != ''" % pre
+        ### Find number of revision posts
+        qry7 = "delete from %sposts where post_type='revision'" % pre
+        ### Find orphaned postmeta data
+        qry8 = "delete from %spostmeta where post_id not in " % pre
+        qry8 += "(select ID from %sposts)" % pre
+	### Kill all users except the admin ones
+	qry9 = "delete from %susers where ID not in (select " % pre
+	qry9 += "user_id from %susermeta)" % pre
+	qry10 = "delete from %susermeta where user_id not in (" % pre
+	qry10 += "select ID from %susers)" % pre
+        try:
+                con = MySQLdb.connect(db="%s" % vars['dbname'],
+                                      user="%s" % vars['dbuser'],
+                                      passwd="%s" % vars['dbpass'])
+                cur = con.cursor()
+                cur.execute(qry1)
+                cur.execute(qry2)
+                cur.execute(qry3)
+                cur.execute(qry4)
+                cur.execute(qry5)
+                cur.execute(qry6)
+                cur.execute(qry7)
+                cur.execute(qry8)
+		if ans == 'yes' or ans == 'y':
+			cur.execute(qry9)
+			cur.execute(qry10)
+		con.commit()
+                cur.close()
+                con.close()
+        except MySQLdb.Error, e:
+                try:
+                        print "\n\nMySQL Error #%d: %s" % (e.args[0], e.args[1])
+                        sys.exit("\nExiting for safety...\n")
+                except IndexError:
+                        print "\n\nMySQL Error: %s" % str(e)
+                        sys.exit("\nExiting for safety...\n")
+	print "\nDatabase cleanup complete, repairing and optimizing the database..."
+	print "\tBE PATIENT THIS CAN TAKE A BIT OF TIME IF THE DATABASE IS HUGE...\n"
+	os.system("mysqlcheck -r -u %s --password='%s' %s" % (vars['dbuser'], vars['dbpass'], vars['dbname']))
+	os.system("mysqlcheck -o -u %s --password='%s' %s" % (vars['dbuser'], vars['dbpass'], vars['dbname']))
+	print "\nDatabase clean, repaired, and optimized.\n"
+#####</function: db_clean>#####
+
+#####<function: bad_requests>#####
+def bad_requests():
+	global vars
+	change = "\n\n### Added per hg_optimizer ###\n"
+	change += "\nErrorDocument 503 'System Undergoing Maintenance'\n"
+	change += "RewriteEngine On\nRewriteCond %{THE_REQUEST} "
+	change += '"xmlrpc.php" [NC]'
+	change += "\nRewriteRule .* - [R=503,L]\n"
+	if len(vars['killbot']) > 0:
+		bots = vars['killbot'].replace(', ', '|')
+		change += "RewriteCond %{HTTP_USER_AGENT} "
+		change += "(%s) [NC]" % bots
+		change += "\nRewriteRule .* - [R=503,L]\n\n"
+	else:
+		change += "\n"
+	change = change.replace('|)', ')')
+	char_set = string.ascii_uppercase + string.digits + string.ascii_lowercase
+	rand = ''.join(random.sample(char_set*15, 15))
+	cmd = "/usr/local/apache/bin/htpasswd -bc %s/.wppasswd admin %s" % (vars['homedir'], rand)
+	os.system(cmd)
+	change += "ErrorDocument 403 'Forbidden'\nAuthUserFile '"
+	change += "%s/.wppasswd'\nAuthType Basic\n" % vars['homedir']
+	change += "AuthName 'Protected File'\n<Files 'wp-login.php'>\n"
+	change += "\tRequire valid-user\n</Files>\n\n"
+        change += "### End of coding added per hg_optimizer ###\n\n"
+	if os.path.exists('.htaccess'):
+		f = open('.htaccess')
+		lines = [x.strip("\n") for x in f.readlines()]
+		f.close()
+		new = change
+		for line in lines:
+			new += "%s\n" % line
+		f = open('.htaccess', "w")
+		f.write(new)
+		f.close()
+		print "\n\nxmlrpc blocked, password protection now on the wp-login.php file"
+		print "\nCredentials for login:"
+		print "\tUsername: admin\n\tPassword: %s\n" % rand
+	else:
+		print "\n\nThere is not .htaccess to modify. You should go make one first.\n\n"
+	if os.path.exists("%s/wp-content/themes/%s/functions.php" % (vars['pwd'], vars['stylesheet'])):
+		file = "%s/wp-content/themes/%s/functions.php" % (vars['pwd'], vars['stylesheet'])
+		f = open(file)
+		lines = [x.strip("\n") for x in f.readlines()]
+		b = len(lines) - 1
+		if lines[b] == '?>':
+			new = "\n\n<?php\n"
+			new += "\nadd_action( 'init', 'kill_heartbeat', 1 );\n"
+			new += "function kill_heartbeat() {\n\tglobal $pagenow;\n"
+			new += "\twp_deregister_script('heartbeat');\n}\n"
+			new += "?>"
+		else:
+                        new += "\nadd_action( 'init', 'kill_heartbeat', 1 );\n"
+                        new += "function kill_heartbeat() {\n\tglobal $pagenow;\n"
+                        new += "\twp_deregister_script('heartbeat');\n}\n"
+		f = open(file, "a")
+		f.write(new)
+		f.close()
+		print "\nHeartbeart disabled. Check the site, seriously. If it isn't working..."
+		print "Check %s and remove the new coding at the" % file
+		print "bottom and then disable heartbeat manually. Seriously do this now...\n"
+	else:
+		print "\nCouldn't locate theme's functions.php file, disable heartbeat manually\n"
+#####</function: bad_requests>#####
+
+#####<function: img_opt>#####
+def img_opt():
+	filename, headers = urllib.urlretrieve('http://downloads.wordpress.org/plugin/ewww-image-optimizer.1.9.3.zip')
+	shutil.move(filename, 'ewww.zip')
+	f = open('ewww.zip', 'rb')
+	z = zipfile.ZipFile(f)
+	for file in z.namelist():
+		out = "%s/wp-content/plugins/" % vars['pwd']
+		z.extract(file, out)
+	f.close()
+	unserial = deserialize(vars['plug_serial'])
+	unserial.append("ewww-image-optimizer/ewww-image-optimizer.php")
+	serial = serialize(unserial)
+        pre = vars['pre']
+	qry = "update %soptions set option_value='%s' where " % (pre, serial)
+	qry += "option_name='active_plugins'"
+	print qry
+        try:
+                con = MySQLdb.connect(db="%s" % vars['dbname'],
+                                      user="%s" % vars['dbuser'],
+                                      passwd="%s" % vars['dbpass'])
+                cur = con.cursor()
+                cur.execute(qry)
+		con.commit()
+		cur.close()
+		con.close()
+        except MySQLdb.Error, e:
+                try:
+                        print "\n\nMySQL Error #%d: %s" % (e.args[0], e.args[1])
+                        sys.exit("\nExiting for safety...\n")
+                except IndexError:
+                        print "\n\nMySQL Error: %s" % str(e)
+                        sys.exit("\nExiting for safety...\n")
+	print "\n\nEwww Image Optimizer installed and activated..."
+	os.unlink('ewww.zip')
+	print "\n\nTo optimize older images, check into running the image"
+	print "optimizer script in screen\n\n"
+#####</function: img_opt>#####
+
+#####<function: phase_one>#####
+def phase_one():
+	global vars
+	if vars['backup_made'] == 'No':
+		print "Starting by generating a backup..."
+		backup()
+	print vars['analyze_out']
+#####</function: phase_one>#####
+
+#####<function: phase_two>#####
+def phase_two():
+	global vars
+	ans = ''
+	while ans != 'done':
+	        cron,bots,config,db,block,image = ['','','','','','']
+		i = 1
+		if vars['backup_made'] == 'No':
+			print "\n\nMaking a backup first...\n"
+			backup()
+			vars['backup_made'] == 'Yes'			
+		out = "\nWhat would you like to do?\n"
+		if vars['cron'] == 'Enabled':
+			out += "\t%i Convert wp-cron.php into a Linux cron job\n" % i
+                        cron = str(i)
+			i += 1
+		if vars['java'] == 'true' or vars['autosave'] < 1800:
+			out += "\t%i Optimize wp-config.php settings\n" % i
+			config = str(i)
+			i += 1
+		if vars['db_total'] == 'yes':
+			out += "\t%i Clean out the database (also repairs/optimizes it)\n" % i
+			db = str(i)
+			i += 1
+		if vars['ajax'] > 10 or vars['xmlrpc'] > 10 or vars['login'] > 10 or vars['killbot'] != '':
+			out += "\t%i Block malicious traffic for wp-login.php, xmlrpc.php, and disable heartbeat\n" % i
+			block = str(i)
+			i += 1
+		if vars['image'] == 0:
+			out += "\t%i Install Ewww Image Optimizer and optimize old images\n" % i
+			image = str(i)
+			i += 1
+		if i == 1:
+			break
+		out += "\t%i Completely done\n" % i
+		print out
+		ans = raw_input("\nPlease select the number you wish to use: ")
+		if ans == '0':
+			print "'%s' is not a valid answer...try again please..." % ans
+		elif ans == str(i):
+			ans = 'done'
+		elif ans == cron:
+			print "\nConverting wp-cron.php into a Linux Cron job...\n"
+			convert_cron()
+			vars['cron'] = 'Disabled'
+		elif ans == config:
+			print "\nOptimizing wp-config.php settings...\n"
+			opt_config()
+			vars['java'] = 'false'
+			vars['autosave'] = 3600
+		elif ans == db:
+			print "\nCleaning, repairing, and optimizing the database...\n"
+			db_clean()
+			vars['db_total'] = 'no'
+		elif ans == block:
+			print "\nBlocking xmlrpc, disabling heartbeat, blocking bad bots, and"
+			print "\tpassword protecting the wp-login.php...\n"
+			bad_requests()
+			vars['ajax'] = 0
+			vars['xmlrpc'] = 0
+			vars['login'] = 0
+			vars['killbot'] = ''
+		elif ans == image:
+			print "\nInstalling Ewww Image Optimizer...\n"
+			img_opt()
+			vars['image'] = 1
+		else:
+			print "\n'%s' is not a valid answer...try again please..." % ans
+	print "\n\nThis completes Phase Two, pending all areas were addressed...\n\n"
+#####</function: phase_two>#####
+
+#####<function: phase_four>#####
+def phase_four():
+	print "\n\nAt this point the rest should be done manually. There is nothing"
+	print "more this script can do for you.\n\n"
+#####</function: phase_four>#####
+
+#####<function: options>#####
+def options():
+	global vars
+	argv = sys.argv[1:]
+	try:
+		opts, args = getopt.getopt(argv, "hVveaid1234", [])
+	except:
+		print "\nInvalid option detected, displaying help page..."
+		show_help()
+	for opt, arg in opts:
+		if opt == '-h':
+			show_help()
+		if opt == '-V':
+			show_version()
+		if opt == '-v':
+			if not 'verbose' in vars:
+				vars['verbose'] = 1
+			else:
+				vars['verbose'] += 1
+		if opt == '-e':
+			vars['extended'] == 1
+		if opt == '-i':
+			vars['output'] = 'i'
+		if opt == '-a':
+			vars['output'] = 'a'
+		if opt == '-d':
+			vars['output'] = 'd'
+		if opt == '-1':
+			vars['output'] = '1'
+		if opt == '-2':
+                        vars['output'] = '2'
+		if opt == '-3':
+                        vars['output'] = '3'
+		if opt == '-4':
+                        vars['output'] = '4'
+	if not 'verbose' in vars:
+		vars['verbose'] = 0
+	if vars['verbose'] > 2:
+		vars['verbose'] = 2
+	if not 'extended' in vars:
+		vars['extended'] = 0
+	if not 'output' in vars:
+		vars['output'] = '1'
+	if not 'backup_made' in vars:
+		vars['backup_made'] = 'No'
+#####</function: options>#####
+
+#####<function: show_output>#####
+def show_output():
+	global vars
+	v = vars['verbose']
+	if vars['output'] == 'a':
+		print "\n"
+		print vars['access_out'][v]
+		sys.exit("\n")
+	elif vars['output'] == 'i':
+		info()
+		sys.exit()
+	elif vars['output'] == 'd':
+		print "\n"
+                print vars['db_analysis_out']
+		perms()
+		sys.exit()
+	elif vars['output'] == '1':
+		phase_one()
+        elif vars['output'] == '2':
+                phase_two()
+        elif vars['output'] == '3':
+                phase_one()
+        elif vars['output'] == '4':
+                phase_four()
+#####</function: show_output>#####
+
+#####<function: main>#####
+def main():
+	try:
+		options()
+		begin()
+		sanity_check()
+		config()
+		apache()
+		analysis()
+		show_output()
+		perms()
+	except KeyboardInterrupt:
+		perms()
+		sys.exit("\n")
+#####</function: main>#####
+
+main()

@@ -1,0 +1,263 @@
+#!/usr/bin/python
+
+import os
+import sys
+import socket
+import re
+import time
+import shutil
+import tarfile
+
+def cleanup():
+	for pwd, dirs, files in os.walk(os.getcwd()):
+		for f in files:
+	        	path = os.path.join(pwd, f)
+	                if re.search("(jpg|jpeg|png|gf)\.(orig|opt|prog)$", os.path.splitext(path)[1]):
+				os.remove(path)
+	sys.exit("\nCleanup complete. Goodbye\n\n")
+
+try:
+        args = sys.argv
+        args_tot = len(args)
+        q = 0
+        skippng = 'off'
+        skipgif = 'off'
+        skipjpg = 'off'
+        while (q < args_tot):
+                if args[q] == '--skip-png':
+                        skippng = 'on'
+                if args[q] == '--skip-gif':
+                        skipgif = 'on'
+                if args[q] == '--skip-jpg':
+                        skipjpg = 'on'
+                if args[q] == '-h' or args[q] == '--help':
+                        print ''
+                        print "optimg:\tSearches for jpg, jpeg, png, and gif files and then enacts"
+                        print "\tseveral different optimization techniques on them. It then"
+                        print "\tdetermines the best of the techniques and has that done on"
+                        print "\tthe original file.\n\nUsage: optimg [option]\n"
+                        print "Options:"
+                        print " --skip-jpg\tSkips optimizing jpg/jpeg images"
+                        print " --skip-png\tSkips optimzing png images"
+                        print " --skip-gif\tSkips optimzing gif images"
+                        print " --help\t\tDisplays this help page"
+                        sys.exit("")
+                q += 1
+        opt = '/usr/bin/jpegtran'
+        png = '/usr/bin/pngcrush'
+        gif = '/usr/bin/gifsicle'
+        if not os.path.exists(opt) and skipjpg == 'off':
+                print "Missing core jpeg binary, this needs to be installed..."
+                host = socket.gethostname()
+                if re.search("(^gator|websitewelcome.com$)", host):
+                        sys.exit("This is on a shared box. Not going to happen...")
+                else:
+                        answer = raw_input("Box appears to not be a shared box, good to proceed? (y/n)  ")
+                        if answer == 'y':
+                                print "Installing..."
+                                os.system("yum install -y libjpeg-turbo.x86_64 libjpeg-turbo-devel.x86_64")
+                                print "Done installing...rechecking for the binary"
+                                if not os.path.exists(opt):
+                                        sys.exit("Something must be wrong, the binary is still not found. Exiting")
+                        elif answer == 'n':
+                                sys.exit("Not Installing...exiting")
+                        else:
+                                sys.exit("Answer was not y or n...exiting")
+        if not os.path.exists(png) and skippng == 'off':
+                print "Missing core png binary, this needs to be installed..."
+                host = socket.gethostname()
+                if re.search("(^gator|websitewelcome.com$)", host):
+                        sys.exit("This is on a shared box. Not going to happen...")
+                else:
+                        answer = raw_input("Box appears to not be a shared box, good to proceed? (y/n)  ")
+                        if answer == 'y':
+                                print "Installing..."
+                                os.system("wget http://packages.sw.be/rpmforge-release/rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm ")
+                                os.system("rpm -i rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm")
+                                os.system("rm -f rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm ")
+                                os.system("yum install -y pngcrush")
+                                os.system("rpm -e rpmforge-release-0.5.2-2.el5.rf.x86_64")
+                                print "Done installing...rechecking for the binary"
+                                if not os.path.exists(png):
+                                        sys.exit("Something must be wrong, the binary is still not found. Exiting")
+                        elif answer == 'n':
+                                sys.exit("Not Installing...exiting")
+                        else:
+                                sys.exit("Answer was not y or n...exiting")
+        if not os.path.exists(gif) and skipgif == 'off':
+                print "Missing core gif binary, it needs to be installed..."
+                host = socket.gethostname()
+                if re.search("(^gator|websitewelcome.com$)", host):
+                        sys.exit("This is on a shared box. Not going to happen...")
+                else:
+                        answer = raw_input("Box appears to not be a shared box, good to proceed? (y/n)  ")
+                        if answer == 'y':
+                                print "Installing..."
+				os.system("wget http://packages.sw.be/rpmforge-release/rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm")
+				os.system("rpm -i rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm")
+				os.system("rm -f rpmforge-release-0.5.2-2.el5.rf.x86_64.rpm")
+                                os.system("yum install -y gifsicle")
+				os.system("rpm -e rpmforge-release-0.5.2-2.el5.rf.x86_64")
+                                print "Done installing...rechecking for the binary"
+                                if not os.path.exists(gif):
+                                        sys.exit("Something must be wrong, the binary is still not found. Exiting")
+                        elif answer == 'n':
+                                sys.exit("Not Installing...exiting")
+                        else:
+                                sys.exit("Answer was not y or n...exiting")
+        prog_count = 0
+        opti_count = 0
+        none_count = 0
+        saved = 0
+        png_saved = 0
+        png_opti_count = 0
+        png_none_count = 0
+        gif_saved = 0
+        gif_opti_count = 0
+        gif_none_count = 0
+        print "Locating and optimizing images (please be patient this can take a while)... ",
+        sys.stdout.flush()
+        i = 0
+        for pwd, dirs, files in os.walk(os.getcwd()):
+                for f in files:
+                        path = os.path.join(pwd, f)
+                        if os.path.splitext(path)[1] == ".jpg" or os.path.splitext(path)[1] == ".jpeg" and skipjpg == 'off':
+                                if (i%4) == 0:
+                                        sys.stdout.write('\b/')
+                                elif (i%4) == 1:
+                                        sys.stdout.write('\b-')
+                                elif (i%4) == 2:
+                                        sys.stdout.write('\b\\')
+                                elif (i%4) == 3:
+                                        sys.stdout.write('\b|')
+
+                                sys.stdout.flush()
+                                i += 1
+                                orig = path + ".orig"
+                                opti = path + ".opt"
+                                prog = path + ".prog"
+                                shutil.copyfile(path, orig)
+        #                       optimize = opt + " -copy none -optimize " + path + " > " + opti
+        #                       progress = opt + " -copy none -progressive " + path + " > " + prog
+                                optimize = opt + " -copy none -optimize \"" + path + "\" > \"" + opti + "\" 2>/dev/null"
+                                progress = opt + " -copy none -progressive \"" + path + "\" > \"" + prog + "\" 2>/dev/null"
+                                os.system(optimize)
+                                os.system(progress)
+                                orig_size = os.path.getsize(orig)
+                                opti_size = os.path.getsize(opti)
+                                prog_size = os.path.getsize(prog)
+                                bytes = 0
+                                if (opti_size < orig_size and opti_size < prog_size):
+                                        shutil.copy(opti, path)
+                                        bytes = orig_size - opti_size
+                                        saved += bytes
+                                        os.remove(orig)
+                                        os.remove(prog)
+                                        os.remove(opti)
+                                        opti_count += 1
+                                elif (prog_size < orig_size and prog_size <= opti_size):
+                                        shutil.copy(prog, path)
+                                        bytes = orig_size - prog_size
+                                        saved += bytes
+                                        os.remove(orig)
+                                        os.remove(prog)
+                                        os.remove(opti)
+                                        prog_count += 1
+                                else:
+                                        os.remove(orig)
+                                        os.remove(prog)
+                                        os.remove(opti)
+                                        none_count += 1
+                        if os.path.splitext(path)[1] == ".png" and skippng == 'off':
+                                if (i%4) == 0:
+                                        sys.stdout.write('\b/')
+                                elif (i%4) == 1:
+                                        sys.stdout.write('\b-')
+                                elif (i%4) == 2:
+                                        sys.stdout.write('\b\\')
+                                elif (i%4) == 3:
+                                        sys.stdout.write('\b|')
+                                sys.stdout.flush()
+                                i += 1
+                                opti = path + ".opt"
+                                orig_size = os.path.getsize(path)
+                                os.system(png + " -rem alla -reduce -brute \"" + path + "\" \"" + opti + "\" 2>/dev/null")
+                                opti_size = os.path.getsize(opti)
+                                if (opti_size < orig_size):
+                                        shutil.copy(opti, path)
+                                        png_bytes = orig_size - opti_size
+                                        png_saved += png_bytes
+                                        os.remove(opti)
+                                        png_opti_count += 1
+                                else:
+                                        os.remove(opti)
+                                        png_none_count += 1
+                        if os.path.splitext(path)[1] == ".gif" and skipgif == 'off':
+                                if (i%4) == 0:
+                                        sys.stdout.write('\b/')
+                                elif (i%4) == 1:
+                                        sys.stdout.write('\b-')
+                                elif (i%4) == 2:
+                                        sys.stdout.write('\b\\')
+                                elif (i%4) == 3:
+                                        sys.stdout.write('\b|')
+                                sys.stdout.flush()
+                                i += 1
+                                opti = path + ".opt"
+                                orig_size = os.path.getsize(path)
+                                os.system(gif + " --no-warnings --no-comments --optimize=2 \"" + path + "\" > \"" + opti + "\" 2>/dev/null")
+                                opti_size = os.path.getsize(opti)
+                                if (opti_size < orig_size):
+                                        shutil.copy(opti, path)
+                                        gif_bytes = orig_size - opti_size
+                                        gif_saved += gif_bytes
+                                        os.remove(opti)
+                                        gif_opti_count += 1
+                                else:
+                                        os.remove(opti)
+                                        gif_none_count += 1
+        tot = prog_count + opti_count + none_count
+        png_tot = png_none_count + png_opti_count
+        gif_tot = gif_opti_count + gif_none_count
+        all_tot = tot + png_tot + gif_tot
+        def convrt_bytes(bytes):
+                cng = 0
+                while (bytes >= 1024):
+                        bytes = bytes / float(1024.00)
+                        cng +=1
+                if (cng == 0):
+                        cng = ' bytes'
+                elif (cng == 1):
+                        cng = ' KB'
+                elif (cng == 2):
+                        cng = ' MB'
+                else:
+                        cng = ' GB'
+                return str(bytes) + cng
+
+        print "\nImage optimization complete: \n"
+        if skipjpg == 'off':
+                print "\tTotal jpg images found:       " + str(tot)
+                print "\tjpg images made progressive:  " + str(prog_count)
+                print "\tjpg images optimized:         " + str(opti_count)
+                print "\tjpg images already optimized: " + str(none_count)
+                print "\tTotal Bytes saved:            " + convrt_bytes(saved)
+        if skippng == 'off':
+                print "\n\tTotal png images found:       " + str(png_tot)
+                print "\tpng images optimized:         " + str(png_opti_count)
+                print "\tpng images already optimized: " + str(png_none_count)
+                print "\tTotal Bytes saved:            " + convrt_bytes(png_saved)
+        if skipgif == 'off':
+                print "\n\tTotal gif images found:       " + str(gif_tot)
+                print "\tgif images optimized:         " + str(gif_opti_count)
+                print "\tgif images already optimized: " + str(gif_none_count)
+                print "\tTotal Bytes saved:            " + convrt_bytes(gif_saved)
+        print "Total images found:             " + str(all_tot)
+        print "Total bytes saved:              " + convrt_bytes(saved + png_saved + gif_saved)
+        print ""
+except KeyboardInterrupt:
+	print "\n\nCtrl+C was pressed...cleaning up and exiting...\n"
+	cleanup()
+except OSError:
+	print "\n\nCtrl+C was pressed...cleaning up and exiting...\n"
+	cleanup()
